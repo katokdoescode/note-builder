@@ -57,12 +57,21 @@ If your plugin does not need CSS, delete this file.
 .recording-textfield, .recording-summary-textfield {
 	resize: vertical;
 	min-height: 100px;
-	box-shadow: 0 0 0px 0px transparent;
 	animation: none;
+}
 
-	&.processing {
-		animation: inset-glowing 2s ease infinite;
-	}
+.outer-glowing {
+	animation: glowing 2s ease infinite;
+}
+
+.inner-glowing {
+	animation: glowing 2s ease infinite;
+}
+
+.recording-merge-label {
+	display: flex;
+	gap: .5rem;
+	align-items: center;
 }
 
 .glowing-wrapper {

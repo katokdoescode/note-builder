@@ -64,6 +64,7 @@ class RecordingModal extends Modal {
 	private recordingButton: HTMLButtonElement;
 	private saveButton: HTMLButtonElement;
 	private summaryButton: HTMLButtonElement;
+	private mergeToggle: HTMLInputElement;
 	private mediaRecorder: MediaRecorder | null = null;
 	private chunks: Blob[] = [];
 	private settings: MyPluginSettings;
@@ -71,6 +72,7 @@ class RecordingModal extends Modal {
 	private summaryField: HTMLTextAreaElement;
 	private recordingFile: File | null = null;
 	private arrayBuffer: ArrayBuffer | null = null;
+	private selectedText: string | undefined = undefined;
 	private ai: AI;
 
 	constructor(app: App, settings: MyPluginSettings, ai: AI) {
@@ -117,6 +119,20 @@ class RecordingModal extends Modal {
 
 		const controlsPanel = wrapper.createEl('div', { cls: 'recording-controls' });
 
+		this.selectedText = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor.getSelection();
+
+		const mergeLabel = controlsPanel.createEl('label', { cls: 'recording-merge-label', attr: { 'for': 'recording-merge-toggle' } });
+		mergeLabel.createEl('span', { text: 'Merge with existing memo' })
+		this.mergeToggle = mergeLabel.createEl('input', {
+			cls: 'recording-merge-toggle',
+			type: 'checkbox',
+			attr: {
+				'id': 'recording-merge-toggle',
+				...!this.selectedText ? { disabled: true } : {},
+				'aria-label': `${this.selectedText ? 'Merge with existing memo' : 'No memo selected'}`
+			}
+		});
+
 		this.saveButton = controlsPanel.createEl('button', {
 			cls: 'recording-button save',
 			text: 'Save',
@@ -141,7 +157,7 @@ class RecordingModal extends Modal {
 					};
 
 					this.mediaRecorder.onstop = async () => {
-						this.textField.classList.add('processing');
+						this.textField.classList.add('inner-glowing');
 						const blob = new Blob(this.chunks, { type: 'audio/wav' });
 						const dateOptions: Intl.DateTimeFormatOptions = {
 							year: 'numeric',
@@ -167,7 +183,7 @@ class RecordingModal extends Modal {
 							new Notice(error);
 							console.error(error);
 						} finally {
-							this.textField.classList.remove('processing');
+							this.textField.classList.remove('inner-glowing');
 
 							if (this.mediaRecorder) {
 								this.mediaRecorder.stream.getTracks().forEach(track => track.stop());
@@ -192,7 +208,7 @@ class RecordingModal extends Modal {
 		};
 
 		this.summaryButton.onclick = async () => {
-			this.summaryField.classList.add('processing');
+			this.summaryField.classList.add('inner-glowing');
 			try {
 				const summary = await this.ai.generateSummary(this.textField.value, this.settings.summaryCustomPrompt, this.settings.summaryOutputFormat);
 				this.summaryField.value = summary;
@@ -200,7 +216,7 @@ class RecordingModal extends Modal {
 				new Notice(error);
 				console.error(error);
 			} finally {
-				this.summaryField.classList.remove('processing');
+				this.summaryField.classList.remove('inner-glowing');
 			}
 		}
 
@@ -231,15 +247,26 @@ class RecordingModal extends Modal {
 
 				if (activeView) {
 					const editor = activeView.editor;
+					const oldMemo = editor.getSelection();
 					if (file) editor.replaceSelection(`![](${file.path})\n`);
-
 					editor.replaceSelection(transcriptionText + `\n`);
 
-					if (summaryText) {
+					if (summaryText && this.mergeToggle.checked && oldMemo) {
+						this.saveButton.classList.add('outer-glowing');
+						try {
+							const mergedText = await this.ai.mergeMemo(oldMemo, summaryText);
+							editor.replaceSelection(mergedText + `\n`);
+						} catch (error) {
+							new Notice(error);
+							console.error(error);
+						} finally {
+							this.saveButton.classList.remove('outer-glowing');
+						}
+					} else if (summaryText) {
 						editor.replaceSelection(summaryText + `\n`);
 					}
 				}
-				new Notice('Transcription saved to the current note.');
+				if (transcriptionText) new Notice('Transcription saved to the current note.');
 				this.close();
 			} else {
 				new Notice('No active note to save the transcription.');

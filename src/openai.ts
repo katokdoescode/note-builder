@@ -31,4 +31,19 @@ export default class AI {
 
 		return response.output_text;
 	}
+
+	async mergeMemo(oldText: string, newText: string) {
+		const response = await this.openai.responses.create({
+			model: "gpt-4o",
+			input: `Merge these two memos:
+
+			Old memo: "${oldText}";
+			New memo: "${newText}";
+
+			Output should be in ${this.language} language.
+			Keep the style of the old memo, also as original text of the old memo.`
+		});
+
+		return response.output_text;
+	}
 }
