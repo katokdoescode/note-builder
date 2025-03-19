@@ -1,16 +1,17 @@
 {
-	"name": "obsidian-sample-plugin",
+	"name": "note-builder",
 	"version": "1.0.0",
-	"description": "This is a sample plugin for Obsidian (https://obsidian.md)",
+	"description": "Voice to notes using AI",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
 		"version": "node version-bump.mjs && git add manifest.json versions.json"
 	},
-	"keywords": [],
-	"author": "",
+	"keywords": ["obsidian", "note", "builder", "memo", "voice", "recording", "transcription", "summary", "ai", "llm", "tasks"],
 	"license": "MIT",
+	"author": "@katokdoescode",
+	"authorUrl": "https://github.com/katokdoescode",
 	"devDependencies": {
 		"@types/node": "^16.11.6",
 		"@typescript-eslint/eslint-plugin": "5.29.0",
