@@ -1,6 +1,6 @@
 {
 	"name": "note-builder",
-	"version": "1.0.0",
+	"version": "1.0.3",
 	"description": "Voice to notes using AI",
 	"main": "main.js",
 	"scripts": {
