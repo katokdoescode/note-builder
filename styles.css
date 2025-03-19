@@ -65,7 +65,7 @@ If your plugin does not need CSS, delete this file.
 }
 
 .inner-glowing {
-	animation: glowing 2s ease infinite;
+	animation: inset-glowing 2s ease infinite;
 }
 
 .recording-merge-label {
@@ -101,6 +101,11 @@ If your plugin does not need CSS, delete this file.
 	&.stop {
 		background-image: var(--stop-circle-fill);
 	}
+}
+
+.recording-button-section {
+	display: flex;
+	gap: .5rem;
 }
 
 @keyframes glowing {

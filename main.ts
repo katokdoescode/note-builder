@@ -1,5 +1,7 @@
 import { App, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile } from 'obsidian';
 import AI from './src/openai';
+import { saveFile } from 'src/utils/files';
+import { AudioRecorder } from 'src/utils/recording';
 import { DEFAULT_SUMMARY_PROMPT, DEFAULT_SUMMARY_FORMAT } from './src/prompts/summary';
 
 interface MyPluginSettings {
@@ -24,6 +26,7 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 export default class NoteBuilder extends Plugin {
 	settings: MyPluginSettings;
 	ai: AI;
+	recorder: AudioRecorder | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -36,17 +39,24 @@ export default class NoteBuilder extends Plugin {
 			name: 'Create memo',
 			hotkeys: [{ modifiers: ['Mod', 'Shift'], key: 'm' }],
 			callback: () => {
-				const recordingModal = new RecordingModal(this.app, this.settings, this.ai);
-				recordingModal.open();
+				const memoModal = new MemoModal(this.app, this.settings, this.ai);
+				memoModal.open();
 			},
 		});
+
+		this.addCommand({
+			id: 'make-recording',
+			name: 'Make recording',
+			hotkeys: [{ modifiers: ['Mod', 'Shift'], key: 'r' }],
+			callback: () => new RecorderModal(this.app, this.settings).open()
+		})
 
 		this.addSettingTab(new SampleSettingTab(this.app, this));
 		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
 	}
 
 	onunload() {
-
+		this.recorder = null;
 	}
 
 	async loadSettings() {
@@ -59,14 +69,83 @@ export default class NoteBuilder extends Plugin {
 	}
 }
 
+class RecorderModal extends Modal {
+	private recordingButton: HTMLButtonElement;
+	private stopRecordingButton: HTMLButtonElement;
+	private recorder: AudioRecorder | null = null;
+	private settings: MyPluginSettings;
 
-class RecordingModal extends Modal {
+	constructor(app: App, settings: MyPluginSettings) {
+		super(app);
+		this.settings = settings;
+	}
+
+	async onOpen() {
+		const { contentEl } = this;
+		contentEl.empty();
+
+		const wrapper = contentEl.createEl('div', { cls: 'recording-wrapper' });
+		const titleSection = wrapper.createEl('div', { cls: 'recording-title-section' });
+		titleSection.createEl('h2', { text: 'Make recording', cls: 'recording-title' });
+		titleSection.createEl('p', { text: 'Click the button below to start recording.', cls: 'recording-subtitle' });
+
+		const buttonSection = wrapper.createEl('div', { cls: 'recording-button-section' });
+		this.recordingButton = buttonSection.createEl('button', { cls: 'recording-button start', attr: { 'aria-label': 'Start recording' } });
+		this.stopRecordingButton = buttonSection.createEl('button', { cls: 'recording-button stop', attr: { 'aria-label': 'Stop recording' } });
+		this.recorder = new AudioRecorder();
+
+		this.recordingButton.onclick = async () => {
+			await this.recorder?.init();
+			await this.recorder?.startRecording();
+		};
+
+		this.stopRecordingButton.onclick = async () => {
+			if (!this.recorder) return;
+			let file: TFile | null = null;
+
+			const { arrayBuffer, audioFile } = await this.recorder.stopRecording();
+			console.log(arrayBuffer, audioFile);
+			if (!arrayBuffer || !audioFile) return;
+			try {
+				file = await saveFile(
+					this.settings.recordingDirectory,
+					arrayBuffer,
+					audioFile.name.split('.').pop() || 'wav',
+					'Recording-',
+					'YYYY-MM-DD_HH-mm'
+				);
+
+				new Notice(`Recording saved to ${file?.path}!`)
+
+				const editor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor;
+				if (editor && file) {
+					new Notice('Recording pasted to the current note.');
+					editor.replaceSelection(`![Recording](${file.path})`);
+				}
+			} catch (error) {
+				new Notice(`Recording failed: ${error.message}`);
+				console.error('Recording failed:', error);
+			} finally {
+				this.close();
+			}
+		};
+	}
+
+	async onClose() {
+		const { contentEl } = this;
+		contentEl.empty();
+		this.recorder?.stopRecording();
+		this.recorder = null;
+	}
+}
+
+
+class MemoModal extends Modal {
 	private recordingButton: HTMLButtonElement;
 	private saveButton: HTMLButtonElement;
 	private summaryButton: HTMLButtonElement;
 	private mergeToggle: HTMLInputElement;
-	private mediaRecorder: MediaRecorder | null = null;
-	private chunks: Blob[] = [];
+	private audioRecorder: AudioRecorder | null = null;
 	private settings: MyPluginSettings;
 	private textField: HTMLTextAreaElement;
 	private summaryField: HTMLTextAreaElement;
@@ -145,64 +224,31 @@ class RecordingModal extends Modal {
 
 		this.recordingButton.onclick = async () => {
 			if (this.recordingButton.classList.contains('start')) {
+				this.recordingButton.classList.replace('start', 'stop');
+				this.recordingButton.ariaLabel = 'Stop recording';
+				this.audioRecorder = new AudioRecorder();
+				await this.audioRecorder.init();
+				this.audioRecorder.startRecording();
+			} else if (this.audioRecorder) {
 				try {
-					const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-					this.mediaRecorder = new MediaRecorder(stream);
-					this.chunks = [];
-
-					this.mediaRecorder.ondataavailable = (event) => {
-						if (event.data.size > 0) {
-							this.chunks.push(event.data);
-						}
-					};
-
-					this.mediaRecorder.onstop = async () => {
+					const { audioFile, arrayBuffer } = await this.audioRecorder.stopRecording();
+					try {
 						this.textField.classList.add('inner-glowing');
-						const blob = new Blob(this.chunks, { type: 'audio/wav' });
-						const dateOptions: Intl.DateTimeFormatOptions = {
-							year: 'numeric',
-							month: 'numeric',
-							day: 'numeric',
-							hour: 'numeric',
-							minute: 'numeric',
-							second: 'numeric'
-						};
-
-						const date = new Date().toLocaleString(undefined, dateOptions).replace(/[\s,\/:;]/g, '-');
-						const audioFile = new File([blob], `ai-recording-${date}.wav`, { type: 'audio/wav' })
-
-
-						try {
-							const result = await this.ai.transcribe(audioFile)
-							const arrayBuffer = await blob.arrayBuffer();
-
-							this.textField.value = result;
-							this.recordingFile = audioFile;
-							this.arrayBuffer = arrayBuffer;
-						} catch (error) {
-							new Notice(error);
-							console.error(error);
-						} finally {
-							this.textField.classList.remove('inner-glowing');
-
-							if (this.mediaRecorder) {
-								this.mediaRecorder.stream.getTracks().forEach(track => track.stop());
-								this.mediaRecorder = null;
-							}
-						}
-					};
-
-					this.mediaRecorder.start();
-					this.recordingButton.classList.replace('start', 'stop');
-					this.recordingButton.ariaLabel = 'Stop recording';
+						const result = await this.ai.transcribe(audioFile);
+						this.textField.value = result;
+						this.recordingFile = audioFile;
+						this.arrayBuffer = arrayBuffer;
+					} catch (error) {
+						new Notice(error);
+						console.error('Transcription error:', error);
+					}
 				} catch (error) {
-					console.error('Error accessing media devices.', error);
-				}
-			} else {
-				if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+					new Notice(`Recording error: ${error.message}`);
+					console.error('Recording error:', error);
+				} finally {
+					this.textField.classList.remove('inner-glowing');
 					this.recordingButton.classList.replace('stop', 'start');
 					this.recordingButton.ariaLabel = 'Start recording';
-					this.mediaRecorder.stop();
 				}
 			}
 		};
@@ -214,7 +260,7 @@ class RecordingModal extends Modal {
 				this.summaryField.value = summary;
 			} catch (error) {
 				new Notice(error);
-				console.error(error);
+				console.error('Summary error:', error);
 			} finally {
 				this.summaryField.classList.remove('inner-glowing');
 			}
@@ -230,18 +276,14 @@ class RecordingModal extends Modal {
 				let file: TFile | null = null;
 
 				if (this.settings.writeRecordingsIntoAFolder) {
-					const directory = this.app.vault.getAbstractFileByPath(this.settings.recordingDirectory);
-
-					if (!directory) {
-						await this.app.vault.createFolder(this.settings.recordingDirectory);
-					}
-
 					if (!this.recordingFile || !this.arrayBuffer) return
 
-					file = await this.app.vault.createBinary(
-						this.settings.recordingDirectory
-						+ '/'
-						+ this.recordingFile.name, this.arrayBuffer
+					file = await saveFile(
+						this.settings.recordingDirectory,
+						this.arrayBuffer,
+						this.recordingFile.name.split('.').pop() || 'wav',
+						'voice-memo-',
+						'YYYY-MM-DD_HH-mm'
 					);
 				}
 
@@ -257,8 +299,8 @@ class RecordingModal extends Modal {
 							const mergedText = await this.ai.mergeMemo(oldMemo, summaryText);
 							editor.replaceSelection(mergedText + `\n`);
 						} catch (error) {
-							new Notice(error);
-							console.error(error);
+							new Notice(`Merge error: ${error.message}`);
+							console.error('Merge error:', error);
 						} finally {
 							this.saveButton.classList.remove('outer-glowing');
 						}
@@ -277,6 +319,8 @@ class RecordingModal extends Modal {
 	onClose() {
 		const { contentEl } = this;
 		contentEl.empty();
+		this.audioRecorder?.stopRecording();
+		this.audioRecorder = null;
 	}
 }
 
