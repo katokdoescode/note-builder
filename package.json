@@ -9,7 +9,7 @@
 		"version": "node version-bump.mjs && git add manifest.json versions.json"
 	},
 	"keywords": ["obsidian", "note", "builder", "memo", "voice", "recording", "transcription", "summary", "ai", "llm", "tasks"],
-	"license": "MIT",
+	"license": "GPL-3.0-only",
 	"author": "@katokdoescode",
 	"authorUrl": "https://github.com/katokdoescode",
 	"devDependencies": {
