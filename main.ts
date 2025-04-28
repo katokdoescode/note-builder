@@ -75,6 +75,11 @@ class RecorderModal extends Modal {
 	private recorder: AudioRecorder | null = null;
 	private settings: MyPluginSettings;
 
+	// Upload state
+	private uploadedFile: File | null = null;
+	private uploadedArrayBuffer: ArrayBuffer | null = null;
+	private uploadedFileNameEl: HTMLElement | null = null;
+
 	// Visualizer properties
 	private audioContext: AudioContext | null = null;
 	private analyser: AnalyserNode | null = null;
@@ -90,16 +95,53 @@ class RecorderModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 
+		// Modal-wide drop overlay
+		const dropOverlay = contentEl.createEl('div', { cls: 'modal-drop-overlay' });
+		dropOverlay.appendChild(
+			contentEl.createDiv({ cls: 'drop-message', text: 'Drop audio file to upload' })
+		);
+
+		let dragCounter = 0;
+		const showOverlay = () => { dropOverlay.classList.add('active'); };
+		const hideOverlay = () => { dropOverlay.classList.remove('active'); };
+
+		contentEl.addEventListener('dragenter', (e) => {
+			e.preventDefault();
+			dragCounter++;
+			showOverlay();
+		});
+		contentEl.addEventListener('dragleave', (e) => {
+			dragCounter--;
+			if (dragCounter <= 0) {
+				hideOverlay();
+				dragCounter = 0;
+			}
+		});
+		contentEl.addEventListener('dragover', (e) => {
+			e.preventDefault();
+		});
+		dropOverlay.addEventListener('drop', (e) => {
+			e.preventDefault();
+			hideOverlay();
+			dragCounter = 0;
+			if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+				handleFile(e.dataTransfer.files[0]);
+			}
+		});
+
 		const wrapper = contentEl.createEl('div', { cls: 'recording-wrapper' });
 		const titleSection = wrapper.createEl('div', { cls: 'recording-title-section' });
 		titleSection.createEl('h2', { text: 'Make recording', cls: 'recording-title' });
-		titleSection.createEl('p', { text: 'Click the button below to start recording.', cls: 'recording-subtitle' });
+		titleSection.createEl('p', { text: 'Record audio from your microphone or upload an audio file.', cls: 'recording-subtitle' });
 
-		const buttonSection = wrapper.createEl('div', { cls: 'recording-button-section' });
+		// --- Microphone Recording Section ---
+		const micSection = wrapper.createEl('div', { cls: 'recording-mic-section' });
+		micSection.createEl('h3', { text: 'Microphone recording', cls: 'recording-mic-heading' });
+		const buttonSection = micSection.createEl('div', { cls: 'recording-button-section' });
 		this.recordingButton = buttonSection.createEl('button', { cls: 'recording-button start', attr: { 'aria-label': 'Start recording' } });
+		const uploadButton = buttonSection.createEl('button', { cls: 'recording-button upload-button', attr: { 'aria-label': 'Upload audio file' } });
 
-		this.audioWaveform = wrapper.createEl('canvas', { cls: 'recording-waveform' });
-		// Make canvas fill the available width and height
+		this.audioWaveform = micSection.createEl('canvas', { cls: 'recording-waveform' });
 		this.audioWaveform.style.width = '100%';
 		this.audioWaveform.style.height = '120px';
 		this.audioWaveform.width = this.audioWaveform.offsetWidth;
@@ -109,24 +151,21 @@ class RecorderModal extends Modal {
 			this.audioWaveform.height = this.audioWaveform.offsetHeight;
 		});
 
-		const stopRecording = async () => {
+		const stopMicRecording = async () => {
 			if (!this.recorder) return;
 			let file: TFile | null = null;
-
 			const { arrayBuffer, audioFile } = await this.recorder.stopRecording();
-
 			if (!arrayBuffer || !audioFile) return;
 			try {
 				file = await saveFile(
+					this.app,
 					this.settings.recordingDirectory,
 					arrayBuffer,
 					audioFile.name.split('.').pop() || 'wav',
 					'Recording-',
 					'YYYY-MM-DD_HH-mm'
 				);
-
 				new Notice(`Recording saved to ${file?.path}!`)
-
 				const editor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor;
 				if (editor && file) {
 					new Notice('Recording pasted to the current note.');
@@ -143,7 +182,6 @@ class RecorderModal extends Modal {
 
 		this.recordingButton.onclick = async ({ target }) => {
 			if (!target || !(target instanceof HTMLButtonElement)) return;
-
 			const action = target.classList.contains('start') ? 'start' : 'stop';
 			if (action === 'start') {
 				this.recorder = new AudioRecorder();
@@ -156,7 +194,36 @@ class RecorderModal extends Modal {
 				target.classList.replace('stop', 'start');
 				target.ariaLabel = 'Start recording';
 				this.stopVisualizer();
-				stopRecording();
+				stopMicRecording();
+			}
+		};
+
+		// --- Upload Section ---
+		const uploadSection = wrapper.createEl('div', { cls: 'recording-upload-section' });
+		const uploadInput = uploadSection.createEl('input', { type: 'file', attr: { accept: '.mp3,.wav,.m4a,audio/*' }, cls: 'recording-upload-input' });
+		uploadInput.style.display = 'none';
+		this.uploadedFileNameEl = uploadSection.createEl('span', { cls: 'recording-upload-filename' });
+
+		const handleFile = async (file: File) => {
+			const validTypes = ['audio/mp3', 'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/m4a', 'audio/x-m4a'];
+			const maxSize = 10 * 1024 * 1024; // 10MB
+			if (!validTypes.includes(file.type) && !['mp3', 'wav', 'm4a'].some(ext => file.name.toLowerCase().endsWith(ext))) {
+				new Notice('Unsupported audio format. Please upload mp3, wav, or m4a.');
+				return;
+			}
+			if (file.size > maxSize) {
+				new Notice('File is too large. Maximum size is 10MB.');
+				return;
+			}
+			this.uploadedFile = file;
+			this.uploadedArrayBuffer = await file.arrayBuffer();
+			if (this.uploadedFileNameEl) this.uploadedFileNameEl.textContent = `Selected: ${file.name}`;
+		};
+		uploadButton.onclick = () => uploadInput.click();
+		uploadInput.onchange = async (e: Event) => {
+			const files = (e.target as HTMLInputElement).files;
+			if (files && files.length > 0) {
+				handleFile(files[0]);
 			}
 		};
 	}
@@ -167,6 +234,9 @@ class RecorderModal extends Modal {
 		this.recorder?.stopRecording();
 		this.recorder = null;
 		this.stopVisualizer();
+		this.uploadedFile = null;
+		this.uploadedArrayBuffer = null;
+		if (this.uploadedFileNameEl) this.uploadedFileNameEl.textContent = '';
 	}
 
 	// --- Visualizer Methods ---
@@ -306,6 +376,11 @@ class MemoModal extends Modal {
 	private selectedText: string | undefined = undefined;
 	private ai: AI;
 
+	// Upload state
+	private uploadedFile: File | null = null;
+	private uploadedArrayBuffer: ArrayBuffer | null = null;
+	private uploadedFileNameEl: HTMLElement | null = null;
+
 	constructor(app: App, settings: MyPluginSettings, ai: AI) {
 		super(app);
 		this.settings = settings;
@@ -316,22 +391,104 @@ class MemoModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 
+		// Modal-wide drop overlay
+		const dropOverlay = contentEl.createEl('div', { cls: 'modal-drop-overlay' });
+		dropOverlay.appendChild(
+			contentEl.createDiv({ cls: 'drop-message', text: 'Drop audio file to upload' })
+		);
+
+		let dragCounter = 0;
+		const showOverlay = () => { dropOverlay.classList.add('active'); };
+		const hideOverlay = () => { dropOverlay.classList.remove('active'); };
+
+		contentEl.addEventListener('dragenter', (e) => {
+			e.preventDefault();
+			dragCounter++;
+			showOverlay();
+		});
+		contentEl.addEventListener('dragleave', (e) => {
+			dragCounter--;
+			if (dragCounter <= 0) {
+				hideOverlay();
+				dragCounter = 0;
+			}
+		});
+		contentEl.addEventListener('dragover', (e) => {
+			e.preventDefault();
+		});
+		dropOverlay.addEventListener('drop', (e) => {
+			e.preventDefault();
+			hideOverlay();
+			dragCounter = 0;
+			if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+				handleFile(e.dataTransfer.files[0]);
+			}
+		});
+
 		const wrapper = contentEl.createEl('div', { cls: 'recording-wrapper' });
 		const titleSection = wrapper.createEl('div', { cls: 'recording-title-section' });
 
 		titleSection.createEl('h3', { text: 'Note Builder', cls: 'recording-title' });
-		titleSection.createEl('p', { text: 'Record your notes and transcribe them into markdown', cls: 'recording-subtitle' });
+		titleSection.createEl('p', { text: 'Record your notes, transcribe, or upload audio for transcription', cls: 'recording-subtitle' });
 
 		const container = wrapper.createEl('div', { cls: 'recording-container' });
 		const glowingWrapper = container.createEl('div', { cls: 'glowing-wrapper' });
 
-		this.recordingButton = glowingWrapper.createEl(
+		const buttonSection = glowingWrapper.createEl('div', { cls: 'recording-button-section' });
+		this.recordingButton = buttonSection.createEl(
 			'button',
 			{
 				cls: 'recording-button start',
 				attr: { 'aria-label': 'Start recording' }
 			}
 		);
+		const uploadButton = buttonSection.createEl('button', {
+			cls: 'recording-button upload-button',
+			attr: { 'aria-label': 'Upload audio file' }
+		});
+
+		// --- Upload UI ---
+		const uploadSection = wrapper.createEl('div', { cls: 'recording-upload-section' });
+		const uploadInput = uploadSection.createEl('input', { type: 'file', attr: { accept: '.mp3,.wav,.m4a,audio/*' }, cls: 'recording-upload-input' });
+		uploadInput.style.display = 'none';
+		this.uploadedFileNameEl = uploadSection.createEl('span', { cls: 'recording-upload-filename' });
+
+		const handleFile = async (file: File) => {
+			const validTypes = ['audio/mp3', 'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/m4a', 'audio/x-m4a'];
+			const maxSize = 10 * 1024 * 1024; // 10MB
+			if (!validTypes.includes(file.type) && !['mp3', 'wav', 'm4a'].some(ext => file.name.toLowerCase().endsWith(ext))) {
+				new Notice('Unsupported audio format. Please upload mp3, wav, or m4a.');
+				return;
+			}
+			if (file.size > maxSize) {
+				new Notice('File is too large. Maximum size is 10MB.');
+				return;
+			}
+			this.uploadedFile = file;
+			this.uploadedArrayBuffer = await file.arrayBuffer();
+			if (this.uploadedFileNameEl) this.uploadedFileNameEl.textContent = `Selected: ${file.name}`;
+			// Auto-transcribe on upload
+			try {
+				this.textField.classList.add('inner-glowing');
+				const result = await this.ai.transcribe(file);
+				this.textField.value = result;
+				this.recordingFile = file;
+				this.arrayBuffer = this.uploadedArrayBuffer;
+			} catch (error) {
+				new Notice(error);
+				console.error('Transcription error:', error);
+			} finally {
+				this.textField.classList.remove('inner-glowing');
+			}
+		};
+		uploadButton.onclick = () => uploadInput.click();
+		uploadInput.onchange = async (e: Event) => {
+			const files = (e.target as HTMLInputElement).files;
+			if (files && files.length > 0) {
+				handleFile(files[0]);
+			}
+		};
+
 		const editorsWrapper = container.createEl('div', { cls: 'recording-editors' });
 		this.textField = editorsWrapper.createEl(
 			'textarea',
@@ -431,6 +588,7 @@ class MemoModal extends Modal {
 					if (!this.recordingFile || !this.arrayBuffer) return
 
 					file = await saveFile(
+						this.app,
 						this.settings.recordingDirectory,
 						this.arrayBuffer,
 						this.recordingFile.name.split('.').pop() || 'wav',
@@ -473,6 +631,9 @@ class MemoModal extends Modal {
 		contentEl.empty();
 		this.audioRecorder?.stopRecording();
 		this.audioRecorder = null;
+		this.uploadedFile = null;
+		this.uploadedArrayBuffer = null;
+		if (this.uploadedFileNameEl) this.uploadedFileNameEl.textContent = '';
 	}
 }
 
