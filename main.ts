@@ -71,9 +71,15 @@ export default class NoteBuilder extends Plugin {
 
 class RecorderModal extends Modal {
 	private recordingButton: HTMLButtonElement;
-	private stopRecordingButton: HTMLButtonElement;
+	private audioWaveform: HTMLCanvasElement;
 	private recorder: AudioRecorder | null = null;
 	private settings: MyPluginSettings;
+
+	// Visualizer properties
+	private audioContext: AudioContext | null = null;
+	private analyser: AnalyserNode | null = null;
+	private animationId: number | null = null;
+	private mediaStream: MediaStream | null = null;
 
 	constructor(app: App, settings: MyPluginSettings) {
 		super(app);
@@ -91,20 +97,24 @@ class RecorderModal extends Modal {
 
 		const buttonSection = wrapper.createEl('div', { cls: 'recording-button-section' });
 		this.recordingButton = buttonSection.createEl('button', { cls: 'recording-button start', attr: { 'aria-label': 'Start recording' } });
-		this.stopRecordingButton = buttonSection.createEl('button', { cls: 'recording-button stop', attr: { 'aria-label': 'Stop recording' } });
-		this.recorder = new AudioRecorder();
 
-		this.recordingButton.onclick = async () => {
-			await this.recorder?.init();
-			await this.recorder?.startRecording();
-		};
+		this.audioWaveform = wrapper.createEl('canvas', { cls: 'recording-waveform' });
+		// Make canvas fill the available width and height
+		this.audioWaveform.style.width = '100%';
+		this.audioWaveform.style.height = '120px';
+		this.audioWaveform.width = this.audioWaveform.offsetWidth;
+		this.audioWaveform.height = this.audioWaveform.offsetHeight;
+		window.addEventListener('resize', () => {
+			this.audioWaveform.width = this.audioWaveform.offsetWidth;
+			this.audioWaveform.height = this.audioWaveform.offsetHeight;
+		});
 
-		this.stopRecordingButton.onclick = async () => {
+		const stopRecording = async () => {
 			if (!this.recorder) return;
 			let file: TFile | null = null;
 
 			const { arrayBuffer, audioFile } = await this.recorder.stopRecording();
-			console.log(arrayBuffer, audioFile);
+
 			if (!arrayBuffer || !audioFile) return;
 			try {
 				file = await saveFile(
@@ -126,7 +136,27 @@ class RecorderModal extends Modal {
 				new Notice(`Recording failed: ${error.message}`);
 				console.error('Recording failed:', error);
 			} finally {
+				this.recorder = null;
 				this.close();
+			}
+		};
+
+		this.recordingButton.onclick = async ({ target }) => {
+			if (!target || !(target instanceof HTMLButtonElement)) return;
+
+			const action = target.classList.contains('start') ? 'start' : 'stop';
+			if (action === 'start') {
+				this.recorder = new AudioRecorder();
+				await this.recorder?.init();
+				this.recorder?.startRecording();
+				target.classList.replace('start', 'stop');
+				target.ariaLabel = 'Stop recording';
+				this.startVisualizer();
+			} else {
+				target.classList.replace('stop', 'start');
+				target.ariaLabel = 'Start recording';
+				this.stopVisualizer();
+				stopRecording();
 			}
 		};
 	}
@@ -136,6 +166,128 @@ class RecorderModal extends Modal {
 		contentEl.empty();
 		this.recorder?.stopRecording();
 		this.recorder = null;
+		this.stopVisualizer();
+	}
+
+	// --- Visualizer Methods ---
+	private async startVisualizer() {
+		try {
+			this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+			this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+			this.analyser = this.audioContext.createAnalyser();
+			this.analyser.fftSize = 256;
+			const source = this.audioContext.createMediaStreamSource(this.mediaStream);
+			source.connect(this.analyser);
+			this.visualize();
+		} catch (err) {
+			this.drawVisualizerError('Microphone access denied or unavailable.');
+		}
+	}
+
+	private stopVisualizer() {
+		if (this.animationId) {
+			cancelAnimationFrame(this.animationId);
+			this.animationId = null;
+		}
+		if (this.audioContext) {
+			this.audioContext.close();
+			this.audioContext = null;
+		}
+		if (this.mediaStream) {
+			this.mediaStream.getTracks().forEach(track => track.stop());
+			this.mediaStream = null;
+		}
+	}
+
+	private drawVisualizerError(message: string) {
+		const canvas = this.audioWaveform;
+		const ctx = canvas.getContext('2d');
+		if (!ctx) return;
+		ctx.clearRect(0, 0, canvas.width, canvas.height);
+		ctx.fillStyle = '#222';
+		ctx.fillRect(0, 0, canvas.width, canvas.height);
+		ctx.font = '18px sans-serif';
+		ctx.fillStyle = '#ff5555';
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'middle';
+		ctx.fillText(message, canvas.width / 2, canvas.height / 2);
+	}
+
+	private visualize() {
+		const canvas = this.audioWaveform;
+		const ctx = canvas.getContext('2d');
+		if (!ctx) return;
+		const analyser = this.analyser;
+		if (!analyser) return;
+
+		const bufferLength = analyser.frequencyBinCount;
+		const dataArray = new Uint8Array(bufferLength);
+
+		const draw = () => {
+			analyser.getByteFrequencyData(dataArray);
+
+			// Responsive canvas
+			const dpr = window.devicePixelRatio || 1;
+			const width = canvas.clientWidth * dpr;
+			const height = canvas.clientHeight * dpr;
+			if (canvas.width !== width || canvas.height !== height) {
+				canvas.width = width;
+				canvas.height = height;
+			}
+
+			ctx.clearRect(0, 0, width, height);
+
+			// Background
+			ctx.fillStyle = 'transparent';
+			ctx.fillRect(0, 0, width, height);
+
+			// Gradient for columns
+			const grad = ctx.createLinearGradient(0, 0, 0, height);
+			grad.addColorStop(0, '#00eaff');
+			grad.addColorStop(0.5, '#0077ff');
+			grad.addColorStop(1, '#0a1a2f');
+
+			const columnCount = Math.floor(width / 16);
+			const spacing = 4 * dpr;
+			const colWidth = (width / columnCount) - spacing;
+			const maxColHeight = height * 0.8;
+			const minColHeight = 4 * dpr;
+			const radius = colWidth / 2;
+
+			for (let i = 0; i < columnCount; i++) {
+				const dataIdx = Math.floor(i * bufferLength / columnCount);
+				const value = dataArray[dataIdx] || 0;
+				const colHeight = Math.max(minColHeight, (value / 255) * maxColHeight);
+				const x = i * (colWidth + spacing);
+				const y = height - colHeight;
+
+				// Draw rounded column
+				if ((ctx as any).roundRect) {
+					ctx.beginPath();
+					(ctx as any).roundRect(x, y, colWidth, colHeight, radius);
+					ctx.fillStyle = grad;
+					ctx.fill();
+				} else {
+					// Fallback for browsers without roundRect
+					ctx.beginPath();
+					ctx.moveTo(x + radius, y);
+					ctx.lineTo(x + colWidth - radius, y);
+					ctx.quadraticCurveTo(x + colWidth, y, x + colWidth, y + radius);
+					ctx.lineTo(x + colWidth, y + colHeight - radius);
+					ctx.quadraticCurveTo(x + colWidth, y + colHeight, x + colWidth - radius, y + colHeight);
+					ctx.lineTo(x + radius, y + colHeight);
+					ctx.quadraticCurveTo(x, y + colHeight, x, y + colHeight - radius);
+					ctx.lineTo(x, y + radius);
+					ctx.quadraticCurveTo(x, y, x + radius, y);
+					ctx.closePath();
+					ctx.fillStyle = grad;
+					ctx.fill();
+				}
+			}
+
+			this.animationId = requestAnimationFrame(draw);
+		};
+		draw();
 	}
 }
 
