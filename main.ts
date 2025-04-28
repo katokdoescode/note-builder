@@ -3,6 +3,7 @@ import AI from './src/openai';
 import { saveFile } from 'src/utils/files';
 import { AudioRecorder } from 'src/utils/recording';
 import { DEFAULT_SUMMARY_PROMPT, DEFAULT_SUMMARY_FORMAT } from './src/prompts/summary';
+import { AudioVisualizer } from './src/utils/audio-visualizer';
 
 interface MyPluginSettings {
 	openaiApiKey: string;
@@ -80,11 +81,8 @@ class RecorderModal extends Modal {
 	private uploadedArrayBuffer: ArrayBuffer | null = null;
 	private uploadedFileNameEl: HTMLElement | null = null;
 
-	// Visualizer properties
-	private audioContext: AudioContext | null = null;
-	private analyser: AnalyserNode | null = null;
-	private animationId: number | null = null;
-	private mediaStream: MediaStream | null = null;
+	// Visualizer
+	private audioVisualizer: AudioVisualizer | null = null;
 
 	constructor(app: App, settings: MyPluginSettings) {
 		super(app);
@@ -150,6 +148,7 @@ class RecorderModal extends Modal {
 			this.audioWaveform.width = this.audioWaveform.offsetWidth;
 			this.audioWaveform.height = this.audioWaveform.offsetHeight;
 		});
+		this.audioVisualizer = new AudioVisualizer(this.audioWaveform);
 
 		const stopMicRecording = async () => {
 			if (!this.recorder) return;
@@ -189,11 +188,11 @@ class RecorderModal extends Modal {
 				this.recorder?.startRecording();
 				target.classList.replace('start', 'stop');
 				target.ariaLabel = 'Stop recording';
-				this.startVisualizer();
+				await this.audioVisualizer?.start();
 			} else {
 				target.classList.replace('stop', 'start');
 				target.ariaLabel = 'Start recording';
-				this.stopVisualizer();
+				this.audioVisualizer?.stop();
 				stopMicRecording();
 			}
 		};
@@ -233,131 +232,10 @@ class RecorderModal extends Modal {
 		contentEl.empty();
 		this.recorder?.stopRecording();
 		this.recorder = null;
-		this.stopVisualizer();
+		this.audioVisualizer?.stop();
 		this.uploadedFile = null;
 		this.uploadedArrayBuffer = null;
 		if (this.uploadedFileNameEl) this.uploadedFileNameEl.textContent = '';
-	}
-
-	// --- Visualizer Methods ---
-	private async startVisualizer() {
-		try {
-			this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-			this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-			this.analyser = this.audioContext.createAnalyser();
-			this.analyser.fftSize = 256;
-			const source = this.audioContext.createMediaStreamSource(this.mediaStream);
-			source.connect(this.analyser);
-			this.visualize();
-		} catch (err) {
-			this.drawVisualizerError('Microphone access denied or unavailable.');
-		}
-	}
-
-	private stopVisualizer() {
-		if (this.animationId) {
-			cancelAnimationFrame(this.animationId);
-			this.animationId = null;
-		}
-		if (this.audioContext) {
-			this.audioContext.close();
-			this.audioContext = null;
-		}
-		if (this.mediaStream) {
-			this.mediaStream.getTracks().forEach(track => track.stop());
-			this.mediaStream = null;
-		}
-	}
-
-	private drawVisualizerError(message: string) {
-		const canvas = this.audioWaveform;
-		const ctx = canvas.getContext('2d');
-		if (!ctx) return;
-		ctx.clearRect(0, 0, canvas.width, canvas.height);
-		ctx.fillStyle = '#222';
-		ctx.fillRect(0, 0, canvas.width, canvas.height);
-		ctx.font = '18px sans-serif';
-		ctx.fillStyle = '#ff5555';
-		ctx.textAlign = 'center';
-		ctx.textBaseline = 'middle';
-		ctx.fillText(message, canvas.width / 2, canvas.height / 2);
-	}
-
-	private visualize() {
-		const canvas = this.audioWaveform;
-		const ctx = canvas.getContext('2d');
-		if (!ctx) return;
-		const analyser = this.analyser;
-		if (!analyser) return;
-
-		const bufferLength = analyser.frequencyBinCount;
-		const dataArray = new Uint8Array(bufferLength);
-
-		const draw = () => {
-			analyser.getByteFrequencyData(dataArray);
-
-			// Responsive canvas
-			const dpr = window.devicePixelRatio || 1;
-			const width = canvas.clientWidth * dpr;
-			const height = canvas.clientHeight * dpr;
-			if (canvas.width !== width || canvas.height !== height) {
-				canvas.width = width;
-				canvas.height = height;
-			}
-
-			ctx.clearRect(0, 0, width, height);
-
-			// Background
-			ctx.fillStyle = 'transparent';
-			ctx.fillRect(0, 0, width, height);
-
-			// Gradient for columns
-			const grad = ctx.createLinearGradient(0, 0, 0, height);
-			grad.addColorStop(0, '#00eaff');
-			grad.addColorStop(0.5, '#0077ff');
-			grad.addColorStop(1, '#0a1a2f');
-
-			const columnCount = Math.floor(width / 16);
-			const spacing = 4 * dpr;
-			const colWidth = (width / columnCount) - spacing;
-			const maxColHeight = height * 0.8;
-			const minColHeight = 4 * dpr;
-			const radius = colWidth / 2;
-
-			for (let i = 0; i < columnCount; i++) {
-				const dataIdx = Math.floor(i * bufferLength / columnCount);
-				const value = dataArray[dataIdx] || 0;
-				const colHeight = Math.max(minColHeight, (value / 255) * maxColHeight);
-				const x = i * (colWidth + spacing);
-				const y = height - colHeight;
-
-				// Draw rounded column
-				if ((ctx as any).roundRect) {
-					ctx.beginPath();
-					(ctx as any).roundRect(x, y, colWidth, colHeight, radius);
-					ctx.fillStyle = grad;
-					ctx.fill();
-				} else {
-					// Fallback for browsers without roundRect
-					ctx.beginPath();
-					ctx.moveTo(x + radius, y);
-					ctx.lineTo(x + colWidth - radius, y);
-					ctx.quadraticCurveTo(x + colWidth, y, x + colWidth, y + radius);
-					ctx.lineTo(x + colWidth, y + colHeight - radius);
-					ctx.quadraticCurveTo(x + colWidth, y + colHeight, x + colWidth - radius, y + colHeight);
-					ctx.lineTo(x + radius, y + colHeight);
-					ctx.quadraticCurveTo(x, y + colHeight, x, y + colHeight - radius);
-					ctx.lineTo(x, y + radius);
-					ctx.quadraticCurveTo(x, y, x + radius, y);
-					ctx.closePath();
-					ctx.fillStyle = grad;
-					ctx.fill();
-				}
-			}
-
-			this.animationId = requestAnimationFrame(draw);
-		};
-		draw();
 	}
 }
 
@@ -432,10 +310,10 @@ class MemoModal extends Modal {
 		titleSection.createEl('p', { text: 'Record your notes, transcribe, or upload audio for transcription', cls: 'recording-subtitle' });
 
 		const container = wrapper.createEl('div', { cls: 'recording-container' });
-		const glowingWrapper = container.createEl('div', { cls: 'glowing-wrapper' });
 
-		const buttonSection = glowingWrapper.createEl('div', { cls: 'recording-button-section' });
-		this.recordingButton = buttonSection.createEl(
+		const buttonSection = container.createEl('div', { cls: 'recording-button-section col' });
+		const glowingWrapper = buttonSection.createEl('div', { cls: 'glowing-wrapper' });
+		this.recordingButton = glowingWrapper.createEl(
 			'button',
 			{
 				cls: 'recording-button start',
@@ -497,13 +375,6 @@ class MemoModal extends Modal {
 				attr: { 'aria-label': 'Transcription' }
 			}
 		);
-		this.summaryField = editorsWrapper.createEl(
-			'textarea',
-			{
-				cls: 'recording-summary-textfield',
-				attr: { 'aria-label': 'Summary' }
-			}
-		);
 
 		const controlsPanel = wrapper.createEl('div', { cls: 'recording-controls' });
 
@@ -563,6 +434,17 @@ class MemoModal extends Modal {
 		};
 
 		this.summaryButton.onclick = async () => {
+			if (!this.summaryField) {
+				const pre = editorsWrapper.createEl('pre', { cls: 'recording-summary-pre' });
+				this.summaryField = pre.createEl(
+					'textarea',
+					{
+						cls: 'recording-summary-textfield',
+						attr: { 'aria-label': 'Summary' }
+					}
+				);
+			}
+
 			this.summaryField.classList.add('inner-glowing');
 			try {
 				const summary = await this.ai.generateSummary(this.textField.value, this.settings.summaryCustomPrompt, this.settings.summaryOutputFormat);

@@ -59,6 +59,7 @@ If your plugin does not need CSS, delete this file.
 .recording-textfield, .recording-summary-textfield {
 	resize: vertical;
 	min-height: 100px;
+	width: 100%;
 	animation: none;
 }
 
@@ -107,8 +108,11 @@ If your plugin does not need CSS, delete this file.
 
 .recording-button-section {
 	display: flex;
-	flex-direction: column;
 	gap: .5rem;
+
+	&.col {
+		flex-direction: column;
+	}
 }
 
 .upload-button {
