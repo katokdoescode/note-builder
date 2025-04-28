@@ -1,6 +1,6 @@
 {
 	"name": "note-builder",
-	"version": "1.0.3",
+	"version": "1.0.4",
 	"description": "Voice to notes using AI",
 	"main": "main.js",
 	"scripts": {
@@ -8,7 +8,19 @@
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
 		"version": "node version-bump.mjs && git add manifest.json versions.json"
 	},
-	"keywords": ["obsidian", "note", "builder", "memo", "voice", "recording", "transcription", "summary", "ai", "llm", "tasks"],
+	"keywords": [
+		"obsidian",
+		"note",
+		"builder",
+		"memo",
+		"voice",
+		"recording",
+		"transcription",
+		"summary",
+		"ai",
+		"llm",
+		"tasks"
+	],
 	"license": "GPL-3.0-only",
 	"author": "@katokdoescode",
 	"authorUrl": "https://github.com/katokdoescode",
