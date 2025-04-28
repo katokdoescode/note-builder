@@ -48,6 +48,7 @@ If your plugin does not need CSS, delete this file.
 	display: flex;
 	gap: 1rem;
 	justify-content: space-between;
+	flex-direction: column;
 }
 
 .recording-options, .recording-actions {
@@ -61,15 +62,24 @@ If your plugin does not need CSS, delete this file.
 
 .recording-actions {
 	align-items: flex-end;
+	justify-content: flex-end;
+	flex-wrap: wrap;
 }
 
 .recording-editors {
 	display: flex;
 	flex-direction: column;
-	gap: 0.5rem
+	gap: 0.5rem;
+
+	pre {
+		margin: 0;
+	}
 }
 
-.recording-textfield, .recording-summary-textfield {
+.recording-textfield,
+.recording-summary-textfield,
+.recording-tasks-textfield,
+.recording-reflex-textfield {
 	resize: vertical;
 	min-height: 100px;
 	width: 100%;

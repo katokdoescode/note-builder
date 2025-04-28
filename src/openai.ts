@@ -46,4 +46,30 @@ export default class AI {
 
 		return response.output_text;
 	}
+
+	async generateTasks(text: string, prompt: string, format: string) {
+		const response = await this.openai.responses.create({
+			model: "gpt-4o",
+			input: `${prompt};
+			The text: "${text}";
+			Using this format: "${format}";
+			Today is: ${new Date().toLocaleDateString()}, so if you need the date, use it, and calculate new dates.
+			Output should be in ${this.language} language. Except the format, it should be in English.`,
+		});
+
+		return response.output_text;
+	}
+
+	async generateReflex(text: string, prompt: string, format: string) {
+		const response = await this.openai.responses.create({
+			model: "gpt-4o",
+			input: `${prompt.replace('{{ transcription }}', text)}
+			Using this format: "${format}"
+			Today is: ${new Date().toLocaleDateString()}.
+			Output should be in ${this.language} language. Except the format, it should be in English.`,
+		});
+
+		return response.output_text;
+	}
+
 }

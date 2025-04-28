@@ -2,8 +2,10 @@ import { App, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TF
 import AI from './src/openai';
 import { saveFile } from 'src/utils/files';
 import { AudioRecorder } from 'src/utils/recording';
-import { DEFAULT_SUMMARY_PROMPT, DEFAULT_SUMMARY_FORMAT } from './src/prompts/summary';
 import { AudioVisualizer } from './src/utils/audio-visualizer';
+import { DEFAULT_SUMMARY_PROMPT, DEFAULT_SUMMARY_FORMAT } from './src/prompts/summary';
+import { DEFAULT_TASKS_FORMAT, DEFAULT_TASKS_PROMPT } from 'src/prompts/tasks';
+import { DEFAULT_REFLEX_PROMPT, DEFAULT_REFLEX_FORMAT } from 'src/prompts/reflex';
 
 interface MyPluginSettings {
 	openaiApiKey: string;
@@ -12,6 +14,11 @@ interface MyPluginSettings {
 	language: string;
 	summaryCustomPrompt: string;
 	summaryOutputFormat: string;
+	tasksCustomPrompt: string;
+	tasksOutputFormat: string;
+
+	reflexCustomPrompt: string;
+	reflexOutputFormat: string;
 
 }
 
@@ -22,6 +29,10 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 	language: 'English',
 	summaryCustomPrompt: DEFAULT_SUMMARY_PROMPT,
 	summaryOutputFormat: DEFAULT_SUMMARY_FORMAT,
+	tasksCustomPrompt: DEFAULT_TASKS_PROMPT,
+	tasksOutputFormat: DEFAULT_TASKS_FORMAT,
+	reflexCustomPrompt: DEFAULT_REFLEX_PROMPT,
+	reflexOutputFormat: DEFAULT_REFLEX_FORMAT,
 }
 
 export default class NoteBuilder extends Plugin {
@@ -243,12 +254,16 @@ class MemoModal extends Modal {
 	private recordingButton: HTMLButtonElement;
 	private saveButton: HTMLButtonElement;
 	private summaryButton: HTMLButtonElement;
+	private tasksButton: HTMLButtonElement;
+	private reflexButton: HTMLButtonElement;
 	private mergeToggle: HTMLInputElement;
 	private saveVoiceCheckbox: HTMLInputElement;
 	private audioRecorder: AudioRecorder | null = null;
 	private settings: MyPluginSettings;
 	private textField: HTMLTextAreaElement;
 	private summaryField: HTMLTextAreaElement;
+	private tasksField: HTMLTextAreaElement;
+	private reflexField: HTMLTextAreaElement;
 	private recordingFile: File | null = null;
 	private arrayBuffer: ArrayBuffer | null = null;
 	private selectedText: string | undefined = undefined;
@@ -415,6 +430,16 @@ class MemoModal extends Modal {
 			text: 'Summary',
 		});
 
+		this.tasksButton = actions.createEl('button', {
+			cls: 'tasks-button',
+			text: 'Tasks',
+		});
+
+		this.reflexButton = actions.createEl('button', {
+			cls: 'reflex-button',
+			text: 'Reflex',
+		});
+
 		this.recordingButton.onclick = async () => {
 			if (this.recordingButton.classList.contains('start')) {
 				this.recordingButton.classList.replace('start', 'stop');
@@ -470,6 +495,42 @@ class MemoModal extends Modal {
 			}
 		}
 
+		this.tasksButton.onclick = async () => {
+			if (!this.tasksField) {
+				const pre = editorsWrapper.createEl('pre', { cls: 'recording-tasks-pre' });
+				this.tasksField = pre.createEl('textarea', { cls: 'recording-tasks-textfield', attr: { 'aria-label': 'Tasks' } });
+			}
+
+			this.tasksField.classList.add('inner-glowing');
+			try {
+				const tasks = await this.ai.generateTasks(this.textField.value, this.settings.tasksCustomPrompt, this.settings.tasksOutputFormat);
+				this.tasksField.value = tasks;
+			} catch (error) {
+				new Notice(error);
+				console.error('Tasks error:', error);
+			} finally {
+				this.tasksField.classList.remove('inner-glowing');
+			}
+		}
+
+		this.reflexButton.onclick = async () => {
+			if (!this.reflexField) {
+				const pre = editorsWrapper.createEl('pre', { cls: 'recording-reflex-pre' });
+				this.reflexField = pre.createEl('textarea', { cls: 'recording-reflex-textfield', attr: { 'aria-label': 'Reflex' } });
+			}
+
+			this.reflexField.classList.add('inner-glowing');
+			try {
+				const reflex = await this.ai.generateReflex(this.textField.value, this.settings.reflexCustomPrompt, this.settings.reflexOutputFormat);
+				this.reflexField.value = reflex;
+			} catch (error) {
+				new Notice(error);
+				console.error('Reflex error:', error);
+			} finally {
+				this.reflexField.classList.remove('inner-glowing');
+			}
+		}
+
 		this.saveButton.onclick = async () => {
 			if (!this.textField.value) this.close();
 			const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -477,11 +538,12 @@ class MemoModal extends Modal {
 			if (activeView) {
 				const transcriptionText = this.textField.value + `\n`;
 				const summaryText = this.summaryField?.value || null;
+				const tasksText = this.tasksField?.value || null;
+				const reflexText = this.reflexField?.value || null;
 				let file: TFile | null = null;
 				let fileLink: string | null = null;
 
 				// Only save voice if checkbox is checked and we have a recording
-				console.log(this.saveVoiceCheckbox.checked, this.recordingFile, this.arrayBuffer);
 				if (this.saveVoiceCheckbox.checked && this.recordingFile && this.arrayBuffer) {
 					try {
 						file = await saveFile(
@@ -505,14 +567,10 @@ class MemoModal extends Modal {
 
 					// Insert summary with file link at the top if applicable
 					if (summaryText) {
-						let summaryWithLink = summaryText;
-						if (fileLink) {
-							summaryWithLink = `${fileLink}\n${summaryText}`;
-						}
 						if (this.mergeToggle.checked && oldMemo) {
 							this.saveButton.classList.add('outer-glowing');
 							try {
-								const mergedText = await this.ai.mergeMemo(oldMemo, summaryWithLink);
+								const mergedText = await this.ai.mergeMemo(oldMemo, summaryText);
 								editor.replaceSelection(mergedText + `\n`);
 							} catch (error) {
 								new Notice(`Merge error: ${error.message}`);
@@ -521,11 +579,14 @@ class MemoModal extends Modal {
 								this.saveButton.classList.remove('outer-glowing');
 							}
 						} else {
-							editor.replaceSelection(summaryWithLink + `\n`);
+							editor.replaceSelection(summaryText + `\n`);
 						}
-					} else if (fileLink) {
-						editor.replaceSelection(fileLink + `\n`);
 					}
+
+					if (tasksText) editor.replaceSelection(tasksText + `\n\n`);
+					if (reflexText) editor.replaceSelection(reflexText + `\n`);
+					// Insert file link after summary
+					if (this.saveVoiceCheckbox.checked && fileLink) editor.replaceSelection(fileLink + `\n`);
 					// Always insert transcription after summary
 					if (transcriptionText) editor.replaceSelection(transcriptionText + `\n`);
 				}
@@ -628,5 +689,26 @@ class SampleSettingTab extends PluginSettingTab {
 					this.plugin.settings.summaryOutputFormat = value;
 					await this.plugin.saveSettings();
 				}));
+
+		new Setting(containerEl)
+			.setName('Tasks custom prompt')
+			.setDesc('Enter a custom prompt for the tasks, or leave empty for default')
+			.addTextArea(text => text
+				.setValue(this.plugin.settings.tasksCustomPrompt)
+				.onChange(async (value) => {
+					this.plugin.settings.tasksCustomPrompt = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Reflex custom prompt')
+			.setDesc('Enter a custom prompt for the reflex, or leave empty for default')
+			.addTextArea(text => text
+				.setValue(this.plugin.settings.reflexCustomPrompt)
+				.onChange(async (value) => {
+					this.plugin.settings.reflexCustomPrompt = value;
+					await this.plugin.saveSettings();
+				}));
+
 	}
 }
