@@ -46,8 +46,21 @@ If your plugin does not need CSS, delete this file.
 
 .recording-controls {
 	display: flex;
+	gap: 1rem;
+	justify-content: space-between;
+}
+
+.recording-options, .recording-actions {
+	display: flex;
 	gap: .5rem;
-	justify-content: flex-end;
+}
+
+.recording-options {
+	flex-direction: column;
+}
+
+.recording-actions {
+	align-items: flex-end;
 }
 
 .recording-editors {
@@ -75,6 +88,11 @@ If your plugin does not need CSS, delete this file.
 	display: flex;
 	gap: .5rem;
 	align-items: center;
+	justify-content: space-between;
+
+	input[type="checkbox"] {
+		margin: 0;
+	}
 }
 
 .glowing-wrapper {

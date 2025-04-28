@@ -230,7 +230,6 @@ class RecorderModal extends Modal {
 	async onClose() {
 		const { contentEl } = this;
 		contentEl.empty();
-		this.recorder?.stopRecording();
 		this.recorder = null;
 		this.audioVisualizer?.stop();
 		this.uploadedFile = null;
@@ -245,6 +244,7 @@ class MemoModal extends Modal {
 	private saveButton: HTMLButtonElement;
 	private summaryButton: HTMLButtonElement;
 	private mergeToggle: HTMLInputElement;
+	private saveVoiceCheckbox: HTMLInputElement;
 	private audioRecorder: AudioRecorder | null = null;
 	private settings: MyPluginSettings;
 	private textField: HTMLTextAreaElement;
@@ -377,10 +377,12 @@ class MemoModal extends Modal {
 		);
 
 		const controlsPanel = wrapper.createEl('div', { cls: 'recording-controls' });
+		const options = controlsPanel.createEl('div', { cls: 'recording-options' });
+		const actions = controlsPanel.createEl('div', { cls: 'recording-actions' });
 
 		this.selectedText = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor.getSelection();
 
-		const mergeLabel = controlsPanel.createEl('label', { cls: 'recording-merge-label', attr: { 'for': 'recording-merge-toggle' } });
+		const mergeLabel = options.createEl('label', { cls: 'recording-merge-label', attr: { 'for': 'recording-merge-toggle' } });
 		mergeLabel.createEl('span', { text: 'Merge with existing memo' })
 		this.mergeToggle = mergeLabel.createEl('input', {
 			cls: 'recording-merge-toggle',
@@ -392,12 +394,23 @@ class MemoModal extends Modal {
 			}
 		});
 
-		this.saveButton = controlsPanel.createEl('button', {
+		const saveVoiceLabel = options.createEl('label', { cls: 'recording-merge-label', attr: { 'for': 'save-voice-checkbox' } });
+		saveVoiceLabel.createEl('span', { text: 'Save voice memo to file and attach link' });
+		this.saveVoiceCheckbox = saveVoiceLabel.createEl('input', {
+			cls: 'save-voice-checkbox',
+			type: 'checkbox',
+			attr: {
+				'id': 'save-voice-checkbox',
+				'aria-label': 'Save voice memo to file and attach link'
+			}
+		});
+
+		this.saveButton = actions.createEl('button', {
 			cls: 'recording-button save',
 			text: 'Save',
 		});
 
-		this.summaryButton = controlsPanel.createEl('button', {
+		this.summaryButton = actions.createEl('button', {
 			cls: 'summary-button',
 			text: 'Summary',
 		});
@@ -463,42 +476,58 @@ class MemoModal extends Modal {
 
 			if (activeView) {
 				const transcriptionText = this.textField.value + `\n`;
-				const summaryText = this.summaryField.value;
+				const summaryText = this.summaryField?.value || null;
 				let file: TFile | null = null;
+				let fileLink: string | null = null;
 
-				if (this.settings.writeRecordingsIntoAFolder) {
-					if (!this.recordingFile || !this.arrayBuffer) return
-
-					file = await saveFile(
-						this.app,
-						this.settings.recordingDirectory,
-						this.arrayBuffer,
-						this.recordingFile.name.split('.').pop() || 'wav',
-						'voice-memo-',
-						'YYYY-MM-DD_HH-mm'
-					);
+				// Only save voice if checkbox is checked and we have a recording
+				console.log(this.saveVoiceCheckbox.checked, this.recordingFile, this.arrayBuffer);
+				if (this.saveVoiceCheckbox.checked && this.recordingFile && this.arrayBuffer) {
+					try {
+						file = await saveFile(
+							this.app,
+							this.settings.recordingDirectory,
+							this.arrayBuffer,
+							this.recordingFile.name.split('.').pop() || 'wav',
+							'voice-memo-',
+						);
+						fileLink = file ? `![](${file.path})\n` : null;
+						new Notice(`Recording saved to ${file?.path}!`);
+					} catch (error) {
+						new Notice(`Recording failed: ${error.message}`);
+						console.error('Recording failed:', error);
+					}
 				}
 
 				if (activeView) {
 					const editor = activeView.editor;
 					const oldMemo = editor.getSelection();
-					if (file) editor.replaceSelection(`![](${file.path})\n`);
-					editor.replaceSelection(transcriptionText + `\n`);
 
-					if (summaryText && this.mergeToggle.checked && oldMemo) {
-						this.saveButton.classList.add('outer-glowing');
-						try {
-							const mergedText = await this.ai.mergeMemo(oldMemo, summaryText);
-							editor.replaceSelection(mergedText + `\n`);
-						} catch (error) {
-							new Notice(`Merge error: ${error.message}`);
-							console.error('Merge error:', error);
-						} finally {
-							this.saveButton.classList.remove('outer-glowing');
+					// Insert summary with file link at the top if applicable
+					if (summaryText) {
+						let summaryWithLink = summaryText;
+						if (fileLink) {
+							summaryWithLink = `${fileLink}\n${summaryText}`;
 						}
-					} else if (summaryText) {
-						editor.replaceSelection(summaryText + `\n`);
+						if (this.mergeToggle.checked && oldMemo) {
+							this.saveButton.classList.add('outer-glowing');
+							try {
+								const mergedText = await this.ai.mergeMemo(oldMemo, summaryWithLink);
+								editor.replaceSelection(mergedText + `\n`);
+							} catch (error) {
+								new Notice(`Merge error: ${error.message}`);
+								console.error('Merge error:', error);
+							} finally {
+								this.saveButton.classList.remove('outer-glowing');
+							}
+						} else {
+							editor.replaceSelection(summaryWithLink + `\n`);
+						}
+					} else if (fileLink) {
+						editor.replaceSelection(fileLink + `\n`);
 					}
+					// Always insert transcription after summary
+					if (transcriptionText) editor.replaceSelection(transcriptionText + `\n`);
 				}
 				if (transcriptionText) new Notice('Transcription saved to the current note.');
 				this.close();
@@ -516,6 +545,7 @@ class MemoModal extends Modal {
 		this.uploadedFile = null;
 		this.uploadedArrayBuffer = null;
 		if (this.uploadedFileNameEl) this.uploadedFileNameEl.textContent = '';
+		if (this.saveVoiceCheckbox) this.saveVoiceCheckbox.checked = false;
 	}
 }
 
