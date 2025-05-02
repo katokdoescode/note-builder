@@ -1,19 +1,37 @@
 import OpenAI from 'openai'
+export interface ModelSettings {
+	transcribeModel: string,
+	summaryModel: string,
+	mergingMemoModel: string
+	tasksModel: string,
+	reflexModel: string,
+}
+
+export const defaultModelSettings = {
+	transcribeModel: 'whisper-1',
+	summaryModel: 'gpt-4o',
+	mergingMemoModel: 'gpt-4o',
+	tasksModel: 'gpt-4o',
+	reflexModel: 'gpt-4o',
+} as const as ModelSettings;
+
 export default class AI {
 	openai
 	language: string;
-	constructor(apiKey: string, language: string) {
+	modelSettings: ModelSettings
+	constructor(apiKey: string, language: string, modelSettings?: ModelSettings) {
 		this.openai = new OpenAI({
 			apiKey,
 			dangerouslyAllowBrowser: true
 		})
 		this.language = language
+		this.modelSettings = modelSettings ?? defaultModelSettings
 	}
 
-	async transcribe(file: File, model = 'whisper-1') {
+	async transcribe(file: File) {
 		const transcription = await this.openai.audio.transcriptions.create({
 			file,
-			model
+			model: this.modelSettings.transcribeModel
 		});
 
 		return transcription.text
@@ -21,7 +39,7 @@ export default class AI {
 
 	async generateSummary(text: string, prompt: string, format: string) {
 		const response = await this.openai.responses.create({
-			model: "gpt-4o",
+			model: this.modelSettings.summaryModel,
 			input: `${prompt}
 			Using this format: "${format}"
 			The text: "${text}"
@@ -34,7 +52,7 @@ export default class AI {
 
 	async mergeMemo(oldText: string, newText: string) {
 		const response = await this.openai.responses.create({
-			model: "gpt-4o",
+			model: this.modelSettings.mergingMemoModel,
 			input: `Merge these two memos:
 
 			Old memo: "${oldText}";
@@ -49,7 +67,7 @@ export default class AI {
 
 	async generateTasks(text: string, prompt: string, format: string) {
 		const response = await this.openai.responses.create({
-			model: "gpt-4o",
+			model: this.modelSettings.tasksModel,
 			input: `${prompt};
 			The text: "${text}";
 			Using this format: "${format}";
@@ -62,7 +80,7 @@ export default class AI {
 
 	async generateReflex(text: string, prompt: string, format: string) {
 		const response = await this.openai.responses.create({
-			model: "gpt-4o",
+			model: this.modelSettings.reflexModel,
 			input: `${prompt.replace('{{ transcription }}', text)}
 			Using this format: "${format}"
 			Today is: ${new Date().toLocaleDateString()}.

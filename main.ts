@@ -1,5 +1,5 @@
 import { App, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile } from 'obsidian';
-import AI from './src/openai';
+import AI, { defaultModelSettings, ModelSettings } from './src/openai';
 import { saveFile } from 'src/utils/files';
 import { AudioRecorder } from 'src/utils/recording';
 import { AudioVisualizer } from './src/utils/audio-visualizer';
@@ -19,6 +19,7 @@ interface MyPluginSettings {
 
 	reflexCustomPrompt: string;
 	reflexOutputFormat: string;
+	modelSettings: ModelSettings;
 
 }
 
@@ -33,6 +34,7 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 	tasksOutputFormat: DEFAULT_TASKS_FORMAT,
 	reflexCustomPrompt: DEFAULT_REFLEX_PROMPT,
 	reflexOutputFormat: DEFAULT_REFLEX_FORMAT,
+	modelSettings: defaultModelSettings
 }
 
 export default class NoteBuilder extends Plugin {
@@ -73,7 +75,7 @@ export default class NoteBuilder extends Plugin {
 
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-		this.ai = new AI(this.settings.openaiApiKey, this.settings.language);
+		this.ai = new AI(this.settings.openaiApiKey, this.settings.language, this.settings.modelSettings);
 	}
 
 	async saveSettings() {
@@ -114,32 +116,36 @@ class RecorderModal extends Modal {
 		const showOverlay = () => { dropOverlay.classList.add('active'); };
 		const hideOverlay = () => { dropOverlay.classList.remove('active'); };
 
-		contentEl.addEventListener('dragenter', (e) => {
+		contentEl.ondragenter = (e) => {
 			e.preventDefault();
 			dragCounter++;
 			showOverlay();
-		});
-		contentEl.addEventListener('dragleave', (e) => {
+		};
+
+		contentEl.ondragleave = (e) => {
 			dragCounter--;
 			if (dragCounter <= 0) {
 				hideOverlay();
 				dragCounter = 0;
 			}
-		});
-		contentEl.addEventListener('dragover', (e) => {
+		};
+
+		contentEl.ondragover = (e) => {
 			e.preventDefault();
-		});
-		dropOverlay.addEventListener('drop', (e) => {
+		};
+
+		dropOverlay.ondrop = (e) => {
 			e.preventDefault();
 			hideOverlay();
 			dragCounter = 0;
 			if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
 				handleFile(e.dataTransfer.files[0]);
 			}
-		});
+		};
 
 		const wrapper = contentEl.createEl('div', { cls: 'recording-wrapper' });
 		const titleSection = wrapper.createEl('div', { cls: 'recording-title-section' });
+
 		titleSection.createEl('h2', { text: 'Make recording', cls: 'recording-title' });
 		titleSection.createEl('p', { text: 'Record audio from your microphone or upload an audio file.', cls: 'recording-subtitle' });
 
@@ -155,10 +161,12 @@ class RecorderModal extends Modal {
 		this.audioWaveform.style.height = '120px';
 		this.audioWaveform.width = this.audioWaveform.offsetWidth;
 		this.audioWaveform.height = this.audioWaveform.offsetHeight;
-		window.addEventListener('resize', () => {
+
+		window.onresize = () => {
 			this.audioWaveform.width = this.audioWaveform.offsetWidth;
 			this.audioWaveform.height = this.audioWaveform.offsetHeight;
-		});
+		};
+
 		this.audioVisualizer = new AudioVisualizer(this.audioWaveform);
 
 		const stopMicRecording = async () => {
@@ -166,27 +174,34 @@ class RecorderModal extends Modal {
 			let file: TFile | null = null;
 			const { arrayBuffer, audioFile } = await this.recorder.stopRecording();
 			if (!arrayBuffer || !audioFile) return;
-			try {
-				file = await saveFile(
-					this.app,
-					this.settings.recordingDirectory,
-					arrayBuffer,
-					audioFile.name.split('.').pop() || 'wav',
-					'Recording-',
-					'YYYY-MM-DD_HH-mm'
-				);
-				new Notice(`Recording saved to ${file?.path}!`)
-				const editor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor;
-				if (editor && file) {
-					new Notice('Recording pasted to the current note.');
-					editor.replaceSelection(`![Recording](${file.path})`);
+
+			// Save file if need
+			if (this.settings.writeRecordingsIntoAFolder) {
+				try {
+					file = await saveFile(
+						this.app,
+						this.settings.recordingDirectory,
+						arrayBuffer,
+						audioFile.name.split('.').pop() || 'wav',
+						'Recording-',
+						'YYYY-MM-DD_HH-mm'
+					);
+
+					new Notice(`Recording saved to ${file?.path}!`)
+
+					const editor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor;
+
+					if (editor && file) {
+						new Notice('Recording pasted to the current note.');
+						editor.replaceSelection(`![Recording](${file.path})`);
+					}
+				} catch (error) {
+					new Notice(`Recording failed: ${error.message}`);
+					console.error('Recording failed:', error);
+				} finally {
+					this.recorder = null;
+					this.close();
 				}
-			} catch (error) {
-				new Notice(`Recording failed: ${error.message}`);
-				console.error('Recording failed:', error);
-			} finally {
-				this.recorder = null;
-				this.close();
 			}
 		};
 
@@ -221,14 +236,17 @@ class RecorderModal extends Modal {
 				new Notice('Unsupported audio format. Please upload mp3, wav, or m4a.');
 				return;
 			}
+
 			if (file.size > maxSize) {
 				new Notice('File is too large. Maximum size is 10MB.');
 				return;
 			}
+
 			this.uploadedFile = file;
 			this.uploadedArrayBuffer = await file.arrayBuffer();
 			if (this.uploadedFileNameEl) this.uploadedFileNameEl.textContent = `Selected: ${file.name}`;
 		};
+
 		uploadButton.onclick = () => uploadInput.click();
 		uploadInput.onchange = async (e: Event) => {
 			const files = (e.target as HTMLInputElement).files;
@@ -294,29 +312,32 @@ class MemoModal extends Modal {
 		const showOverlay = () => { dropOverlay.classList.add('active'); };
 		const hideOverlay = () => { dropOverlay.classList.remove('active'); };
 
-		contentEl.addEventListener('dragenter', (e) => {
+		contentEl.ondragenter = (e) => {
 			e.preventDefault();
 			dragCounter++;
 			showOverlay();
-		});
-		contentEl.addEventListener('dragleave', (e) => {
+		};
+
+		contentEl.ondragleave = (e) => {
 			dragCounter--;
 			if (dragCounter <= 0) {
 				hideOverlay();
 				dragCounter = 0;
 			}
-		});
-		contentEl.addEventListener('dragover', (e) => {
+		};
+
+		contentEl.ondragover = (e) => {
 			e.preventDefault();
-		});
-		dropOverlay.addEventListener('drop', (e) => {
+		};
+
+		dropOverlay.ondrop = (e) => {
 			e.preventDefault();
 			hideOverlay();
 			dragCounter = 0;
 			if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
 				handleFile(e.dataTransfer.files[0]);
 			}
-		});
+		};
 
 		const wrapper = contentEl.createEl('div', { cls: 'recording-wrapper' });
 		const titleSection = wrapper.createEl('div', { cls: 'recording-title-section' });
@@ -328,6 +349,7 @@ class MemoModal extends Modal {
 
 		const buttonSection = container.createEl('div', { cls: 'recording-button-section col' });
 		const glowingWrapper = buttonSection.createEl('div', { cls: 'glowing-wrapper' });
+
 		this.recordingButton = glowingWrapper.createEl(
 			'button',
 			{
@@ -335,6 +357,7 @@ class MemoModal extends Modal {
 				attr: { 'aria-label': 'Start recording' }
 			}
 		);
+
 		const uploadButton = buttonSection.createEl('button', {
 			cls: 'recording-button upload-button',
 			attr: { 'aria-label': 'Upload audio file' }
@@ -672,6 +695,18 @@ class SampleSettingTab extends PluginSettingTab {
 		containerEl.createEl('h3', { text: 'Audio Memo Settings' }).style.marginTop = '1.5rem';
 
 		new Setting(containerEl)
+			.setName('Transcription model')
+			.setDesc('Enter a model name, or leave empty to yse "whisper-1" by default')
+			.addText(text => text
+				.setPlaceholder('whisper-1, etc.')
+				.setValue(this.plugin.settings.modelSettings.transcribeModel)
+				.onChange(async (value) => {
+					this.plugin.settings.modelSettings.transcribeModel = value;
+					await this.plugin.saveSettings();
+				})
+			)
+
+		new Setting(containerEl)
 			.setName('Summary custom prompt')
 			.setDesc('Enter a custom prompt for the summary, or leave empty for default')
 			.addTextArea(text => text
@@ -691,6 +726,30 @@ class SampleSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
+			.setName('Summary model')
+			.setDesc('Enter a model name, or leave empty to yse "gpt-4o" by default')
+			.addText(text => text
+				.setPlaceholder('gpt-4o, etc.')
+				.setValue(this.plugin.settings.modelSettings.summaryModel)
+				.onChange(async (value) => {
+					this.plugin.settings.modelSettings.summaryModel = value;
+					await this.plugin.saveSettings();
+				})
+			)
+
+		new Setting(containerEl)
+			.setName('Merging model')
+			.setDesc('Enter a model name, or leave empty to yse "gpt-4o" by default')
+			.addText(text => text
+				.setPlaceholder('gpt-4o, etc.')
+				.setValue(this.plugin.settings.modelSettings.mergingMemoModel)
+				.onChange(async (value) => {
+					this.plugin.settings.modelSettings.mergingMemoModel = value;
+					await this.plugin.saveSettings();
+				})
+			)
+
+		new Setting(containerEl)
 			.setName('Tasks custom prompt')
 			.setDesc('Enter a custom prompt for the tasks, or leave empty for default')
 			.addTextArea(text => text
@@ -701,6 +760,18 @@ class SampleSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
+			.setName('Tasks model')
+			.setDesc('Enter a model name, or leave empty to yse "gpt-4o" by default')
+			.addText(text => text
+				.setPlaceholder('gpt-4o, etc')
+				.setValue(this.plugin.settings.modelSettings.tasksModel)
+				.onChange(async (value) => {
+					this.plugin.settings.modelSettings.tasksModel = value;
+					await this.plugin.saveSettings();
+				})
+			)
+
+		new Setting(containerEl)
 			.setName('Reflex custom prompt')
 			.setDesc('Enter a custom prompt for the reflex, or leave empty for default')
 			.addTextArea(text => text
@@ -709,6 +780,18 @@ class SampleSettingTab extends PluginSettingTab {
 					this.plugin.settings.reflexCustomPrompt = value;
 					await this.plugin.saveSettings();
 				}));
+
+		new Setting(containerEl)
+			.setName('Reflex model')
+			.setDesc('Enter a model name, or leave empty to yse "gpt-4o" by default')
+			.addText(text => text
+				.setPlaceholder('gpt-4o, etc.')
+				.setValue(this.plugin.settings.modelSettings.reflexModel)
+				.onChange(async (value) => {
+					this.plugin.settings.modelSettings.reflexModel = value;
+					await this.plugin.saveSettings();
+				})
+			)
 
 	}
 }
