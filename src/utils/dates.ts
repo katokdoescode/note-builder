@@ -39,3 +39,15 @@ export type DateFormatMask =
 	| 'YYYY-MM-DD_HH-mm'
 	| 'MM-DD-YYYY_HH-mm-ss'
 	| 'MM-DD-YYYY_HH-mm';
+
+
+export function getDate(date: Date = new Date()): string {
+	const dateOptions = {
+		weekday: "long",
+		year: "numeric",
+		month: "long",
+		day: "numeric",
+	} as const;
+
+	return date.toLocaleDateString(undefined, dateOptions);
+}

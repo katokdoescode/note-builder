@@ -1,4 +1,15 @@
-export const DEFAULT_SUMMARY_PROMPT = `Create the summary of the following memo`
+export const DEFAULT_SUMMARY_PROMPT = `
+You are a summary writer. You are given a memo and you need to create a summary of the memo.
+
+This is the memo: "{{ transcription }}"
+
+The summary should be in the following format: "{{ format }}"
+
+If you dont have some information used in the template, just skip it.
+
+And here is also other information that you should use: {{ otherInformation }}
+`;
+
 export const DEFAULT_SUMMARY_FORMAT = `
 ## Summary
 

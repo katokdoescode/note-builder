@@ -1,4 +1,5 @@
 import OpenAI from 'openai'
+import { getDate } from 'src/utils/dates';
 export interface ModelSettings {
 	transcribeModel: string,
 	summaryModel: string,
@@ -66,13 +67,18 @@ export default class AI {
 	}
 
 	async generateTasks(text: string, prompt: string, format: string) {
+		const otherInformation = `
+		Today is: "${getDate()}", so if you need the date, use it, and calculate new dates.
+		Output should be in "${this.language}" language.`;
+
+		const input = prompt
+			.replace('{{ transcription }}', text)
+			.replace('{{ format }}', format)
+			.replace('{{ otherInformation }}', otherInformation);
+
 		const response = await this.openai.responses.create({
 			model: this.modelSettings.tasksModel,
-			input: `${prompt};
-			The text: "${text}";
-			Using this format: "${format}";
-			Today is: ${new Date().toLocaleDateString()}, so if you need the date, use it, and calculate new dates.
-			Output should be in ${this.language} language. Except the format, it should be in English.`,
+			input,
 		});
 
 		return response.output_text;
