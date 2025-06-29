@@ -1,9 +1,9 @@
 {
 	"id": "note-builder",
 	"name": "Note Builder",
-	"version": "1.0.4",
+	"version": "1.0.5",
 	"minAppVersion": "0.15.0",
-	"description": "Voice to notes using AI",
+	"description": "Provides several commands to work with your voice memoes to convert them to notes using OpenAI's Whisper API and OpenAI's ChatGPT API",
 	"author": "@katokdoescode",
 	"authorUrl": "https://github.com/katokdoescode",
 	"isDesktopOnly": false

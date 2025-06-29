@@ -8,3 +8,4 @@ This plugin is designed to easily and quickly create new notes and tasks using v
 - Creating notes from voice input: transcribes the voice and generates a summary based on a predefined format;
 - Creating tasks from the voice input;
 - Creating reflex notes from the voice input;
+- Creating custom commands from the voice input;
