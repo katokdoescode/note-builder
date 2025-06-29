@@ -219,3 +219,41 @@ If your plugin does not need CSS, delete this file.
 	font-size: 1.2em;
 	box-shadow: 0 2px 16px rgba(0,0,0,0.15);
 }
+
+/* Custom Command Modal Styles */
+.custom-command-section {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+	margin-bottom: 1rem;
+}
+
+.custom-command-label {
+	font-size: 0.9rem;
+	font-weight: 600;
+	color: var(--text-muted);
+	margin: 0;
+}
+
+.custom-prompt-field {
+	min-height: 80px;
+}
+
+.recording-button.process {
+	background-color: var(--interactive-accent);
+	color: var(--text-on-accent);
+	border: none;
+	padding: 0.5rem 1rem;
+	border-radius: var(--button-radius);
+	font-weight: 500;
+	cursor: pointer;
+	transition: background-color 0.2s ease;
+}
+
+.recording-button.process:hover {
+	background-color: var(--interactive-accent-hover);
+}
+
+.recording-button.process:active {
+	background-color: var(--interactive-accent-active);
+}

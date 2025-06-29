@@ -16,7 +16,6 @@ interface MyPluginSettings {
 	summaryOutputFormat: string;
 	tasksCustomPrompt: string;
 	tasksOutputFormat: string;
-
 	reflexCustomPrompt: string;
 	reflexOutputFormat: string;
 	modelSettings: ModelSettings;
@@ -64,6 +63,16 @@ export default class NoteBuilder extends Plugin {
 			hotkeys: [{ modifiers: ['Mod', 'Shift'], key: 'r' }],
 			callback: () => new RecorderModal(this.app, this.settings).open()
 		})
+
+		this.addCommand({
+			id: 'custom-command',
+			name: 'Custom command',
+			hotkeys: [{ modifiers: ['Mod', 'Shift'], key: 'c' }],
+			callback: () => {
+				const customCommandModal = new CustomCommandModal(this.app, this.settings, this.ai);
+				customCommandModal.open();
+			},
+		});
 
 		this.addSettingTab(new SampleSettingTab(this.app, this));
 		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
@@ -633,6 +642,282 @@ class MemoModal extends Modal {
 	}
 }
 
+class CustomCommandModal extends Modal {
+	private recordingButton: HTMLButtonElement;
+	private processButton: HTMLButtonElement;
+	private insertButton: HTMLButtonElement;
+	private audioRecorder: AudioRecorder | null = null;
+	private settings: MyPluginSettings;
+	private transcriptionField: HTMLTextAreaElement;
+	private customPromptField: HTMLTextAreaElement;
+	private resultField: HTMLTextAreaElement;
+	private recordingFile: File | null = null;
+	private arrayBuffer: ArrayBuffer | null = null;
+	private ai: AI;
+
+	// Upload state
+	private uploadedFile: File | null = null;
+	private uploadedArrayBuffer: ArrayBuffer | null = null;
+	private uploadedFileNameEl: HTMLElement | null = null;
+
+	constructor(app: App, settings: MyPluginSettings, ai: AI) {
+		super(app);
+		this.settings = settings;
+		this.ai = ai;
+	}
+
+	onOpen() {
+		const { contentEl } = this;
+		contentEl.empty();
+
+		// Modal-wide drop overlay
+		const dropOverlay = contentEl.createEl('div', { cls: 'modal-drop-overlay' });
+		dropOverlay.appendChild(
+			contentEl.createDiv({ cls: 'drop-message', text: 'Drop audio file to upload' })
+		);
+
+		let dragCounter = 0;
+		const showOverlay = () => { dropOverlay.classList.add('active'); };
+		const hideOverlay = () => { dropOverlay.classList.remove('active'); };
+
+		contentEl.ondragenter = (e) => {
+			e.preventDefault();
+			dragCounter++;
+			showOverlay();
+		};
+
+		contentEl.ondragleave = (e) => {
+			dragCounter--;
+			if (dragCounter <= 0) {
+				hideOverlay();
+				dragCounter = 0;
+			}
+		};
+
+		contentEl.ondragover = (e) => {
+			e.preventDefault();
+		};
+
+		dropOverlay.ondrop = (e) => {
+			e.preventDefault();
+			hideOverlay();
+			dragCounter = 0;
+			if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+				handleFile(e.dataTransfer.files[0]);
+			}
+		};
+
+		const wrapper = contentEl.createEl('div', { cls: 'recording-wrapper' });
+		const titleSection = wrapper.createEl('div', { cls: 'recording-title-section' });
+
+		titleSection.createEl('h3', { text: 'Custom Command', cls: 'recording-title' });
+		titleSection.createEl('p', { text: 'Record or upload audio, then use a custom prompt to process the transcription', cls: 'recording-subtitle' });
+
+		const container = wrapper.createEl('div', { cls: 'recording-container' });
+
+		const buttonSection = container.createEl('div', { cls: 'recording-button-section col' });
+		const glowingWrapper = buttonSection.createEl('div', { cls: 'glowing-wrapper' });
+
+		this.recordingButton = glowingWrapper.createEl(
+			'button',
+			{
+				cls: 'recording-button start',
+				attr: { 'aria-label': 'Start recording' }
+			}
+		);
+
+		const uploadButton = buttonSection.createEl('button', {
+			cls: 'recording-button upload-button',
+			attr: { 'aria-label': 'Upload audio file' }
+		});
+
+		// --- Upload UI ---
+		const uploadSection = wrapper.createEl('div', { cls: 'recording-upload-section' });
+		const uploadInput = uploadSection.createEl('input', { type: 'file', attr: { accept: '.mp3,.wav,.m4a,audio/*' }, cls: 'recording-upload-input' });
+		uploadInput.style.display = 'none';
+		this.uploadedFileNameEl = uploadSection.createEl('span', { cls: 'recording-upload-filename' });
+
+		const handleFile = async (file: File) => {
+			const validTypes = ['audio/mp3', 'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/m4a', 'audio/x-m4a'];
+			const maxSize = 10 * 1024 * 1024; // 10MB
+			if (!validTypes.includes(file.type) && !['mp3', 'wav', 'm4a'].some(ext => file.name.toLowerCase().endsWith(ext))) {
+				new Notice('Unsupported audio format. Please upload mp3, wav, or m4a.');
+				return;
+			}
+			if (file.size > maxSize) {
+				new Notice('File is too large. Maximum size is 10MB.');
+				return;
+			}
+			this.uploadedFile = file;
+			this.uploadedArrayBuffer = await file.arrayBuffer();
+			if (this.uploadedFileNameEl) this.uploadedFileNameEl.textContent = `Selected: ${file.name}`;
+			// Auto-transcribe on upload
+			try {
+				this.transcriptionField.classList.add('inner-glowing');
+				const result = await this.ai.transcribe(file);
+				this.transcriptionField.value = result;
+				this.recordingFile = file;
+				this.arrayBuffer = this.uploadedArrayBuffer;
+			} catch (error) {
+				new Notice(error);
+				console.error('Transcription error:', error);
+			} finally {
+				this.transcriptionField.classList.remove('inner-glowing');
+			}
+		};
+		uploadButton.onclick = () => uploadInput.click();
+		uploadInput.onchange = async (e: Event) => {
+			const files = (e.target as HTMLInputElement).files;
+			if (files && files.length > 0) {
+				handleFile(files[0]);
+			}
+		};
+
+		const editorsWrapper = container.createEl('div', { cls: 'recording-editors' });
+
+		// Transcription field
+		const transcriptionSection = editorsWrapper.createEl('div', { cls: 'custom-command-section' });
+		transcriptionSection.createEl('h4', { text: 'Transcription', cls: 'custom-command-label' });
+		this.transcriptionField = transcriptionSection.createEl(
+			'textarea',
+			{
+				cls: 'recording-textfield',
+				attr: { 'aria-label': 'Transcription', 'placeholder': 'Transcription will appear here...' }
+			}
+		);
+
+		// Custom prompt field
+		const promptSection = editorsWrapper.createEl('div', { cls: 'custom-command-section' });
+		promptSection.createEl('h4', { text: 'Custom Prompt', cls: 'custom-command-label' });
+		this.customPromptField = promptSection.createEl(
+			'textarea',
+			{
+				cls: 'recording-textfield custom-prompt-field',
+				attr: { 'aria-label': 'Custom Prompt', 'placeholder': 'Enter your custom prompt here...' }
+			}
+		);
+
+		// Result field
+		const resultSection = editorsWrapper.createEl('div', { cls: 'custom-command-section' });
+		resultSection.createEl('h4', { text: 'Result Preview', cls: 'custom-command-label' });
+		this.resultField = resultSection.createEl(
+			'textarea',
+			{
+				cls: 'recording-textfield result-field',
+				attr: { 'aria-label': 'Result Preview', 'placeholder': 'Processing result will appear here...' }
+			}
+		);
+
+		const controlsPanel = wrapper.createEl('div', { cls: 'recording-controls' });
+		const actions = controlsPanel.createEl('div', { cls: 'recording-actions' });
+
+		this.processButton = actions.createEl('button', {
+			cls: 'recording-button process',
+			text: 'Process',
+		});
+
+		this.insertButton = actions.createEl('button', {
+			cls: 'recording-button insert',
+			text: 'Insert to Note',
+		});
+		this.insertButton.disabled = true; // Initially disabled until we have a result
+
+		this.recordingButton.onclick = async () => {
+			if (this.recordingButton.classList.contains('start')) {
+				this.recordingButton.classList.replace('start', 'stop');
+				this.recordingButton.ariaLabel = 'Stop recording';
+				this.audioRecorder = new AudioRecorder();
+				await this.audioRecorder.init();
+				this.audioRecorder.startRecording();
+			} else if (this.audioRecorder) {
+				try {
+					const { audioFile, arrayBuffer } = await this.audioRecorder.stopRecording();
+					try {
+						this.transcriptionField.classList.add('inner-glowing');
+						const result = await this.ai.transcribe(audioFile);
+						this.transcriptionField.value = result;
+						this.recordingFile = audioFile;
+						this.arrayBuffer = arrayBuffer;
+					} catch (error) {
+						new Notice(error);
+						console.error('Transcription error:', error);
+					}
+				} catch (error) {
+					new Notice(`Recording error: ${error.message}`);
+					console.error('Recording error:', error);
+				} finally {
+					this.transcriptionField.classList.remove('inner-glowing');
+					this.recordingButton.classList.replace('stop', 'start');
+					this.recordingButton.ariaLabel = 'Start recording';
+				}
+			}
+		};
+
+		this.processButton.onclick = async () => {
+			if (!this.transcriptionField.value.trim()) {
+				new Notice('Please record or upload audio first to get transcription.');
+				return;
+			}
+			if (!this.customPromptField.value.trim()) {
+				new Notice('Please enter a custom prompt.');
+				return;
+			}
+
+			this.processButton.classList.add('outer-glowing');
+			this.resultField.classList.add('inner-glowing');
+			try {
+				const result = await this.ai.generateCustomResponse(
+					this.transcriptionField.value,
+					this.customPromptField.value
+				);
+
+				this.resultField.value = result;
+				this.insertButton.disabled = false; // Enable insert button
+				new Notice('Processing completed! Preview the result and click "Insert to Note" when ready.');
+			} catch (error) {
+				new Notice(`Processing error: ${error.message}`);
+				console.error('Processing error:', error);
+			} finally {
+				this.processButton.classList.remove('outer-glowing');
+				this.resultField.classList.remove('inner-glowing');
+			}
+		};
+
+		this.insertButton.onclick = async () => {
+			if (!this.resultField.value.trim()) {
+				new Notice('No result to insert. Please process first.');
+				return;
+			}
+
+			const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+			if (!activeView) {
+				new Notice('No active note to insert the result.');
+				return;
+			}
+
+			try {
+				const editor = activeView.editor;
+				editor.replaceSelection(this.resultField.value + '\n');
+				new Notice('Custom command result inserted to the current note.');
+				this.close();
+			} catch (error) {
+				new Notice(`Insert error: ${error.message}`);
+				console.error('Insert error:', error);
+			}
+		};
+	}
+
+	onClose() {
+		const { contentEl } = this;
+		contentEl.empty();
+		this.audioRecorder?.stopRecording();
+		this.audioRecorder = null;
+		this.uploadedFile = null;
+		this.uploadedArrayBuffer = null;
+		if (this.uploadedFileNameEl) this.uploadedFileNameEl.textContent = '';
+	}
+}
+
 class SampleSettingTab extends PluginSettingTab {
 	plugin: NoteBuilder;
 
@@ -760,6 +1045,15 @@ class SampleSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
+			.setName('Tasks output format')
+			.addTextArea(text => text
+				.setValue(this.plugin.settings.tasksOutputFormat)
+				.onChange(async (value) => {
+					this.plugin.settings.tasksOutputFormat = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
 			.setName('Tasks model')
 			.setDesc('Enter a model name, or leave empty to yse "gpt-4o" by default')
 			.addText(text => text
@@ -793,5 +1087,16 @@ class SampleSettingTab extends PluginSettingTab {
 				})
 			)
 
+		new Setting(containerEl)
+			.setName('Custom response model')
+			.setDesc('Enter a model name, or leave empty to yse "gpt-4o" by default')
+			.addText(text => text
+				.setPlaceholder('gpt-4o, etc.')
+				.setValue(this.plugin.settings.modelSettings.customResponseModel)
+				.onChange(async (value) => {
+					this.plugin.settings.modelSettings.customResponseModel = value;
+					await this.plugin.saveSettings();
+				})
+			)
 	}
 }
