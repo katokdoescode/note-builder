@@ -119,6 +119,12 @@ If your plugin does not need CSS, delete this file.
 	}
 }
 
+.recording-waveform {
+	width: 100%;
+	height: 120px;
+}
+
+
 .recording-button {
 	background-position: center;
 	background-repeat: no-repeat;
@@ -192,6 +198,10 @@ If your plugin does not need CSS, delete this file.
 	}
 }
 
+.recording-upload-input {
+	display: none;
+}
+
 .modal-drop-overlay {
 	position: fixed;
 	inset: 0;
@@ -256,4 +266,10 @@ If your plugin does not need CSS, delete this file.
 
 .recording-button.process:active {
 	background-color: var(--interactive-accent-active);
+}
+
+/* Settings */
+
+.note-builder-settings-title {
+	margin-top: 1.5rem;
 }

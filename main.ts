@@ -2,12 +2,11 @@ import { App, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TF
 import AI, { defaultModelSettings, ModelSettings } from './src/openai';
 import { saveFile } from 'src/utils/files';
 import { AudioRecorder } from 'src/utils/recording';
-import { AudioVisualizer } from './src/utils/audio-visualizer';
 import { DEFAULT_SUMMARY_PROMPT, DEFAULT_SUMMARY_FORMAT } from './src/prompts/summary';
 import { DEFAULT_TASKS_FORMAT, DEFAULT_TASKS_PROMPT } from 'src/prompts/tasks';
 import { DEFAULT_REFLEX_PROMPT, DEFAULT_REFLEX_FORMAT } from 'src/prompts/reflex';
 
-interface MyPluginSettings {
+interface NoteBuilderPluginSettings {
 	openaiApiKey: string;
 	writeRecordingsIntoAFolder: boolean;
 	recordingDirectory: string;
@@ -22,7 +21,7 @@ interface MyPluginSettings {
 
 }
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
+const DEFAULT_SETTINGS: NoteBuilderPluginSettings = {
 	openaiApiKey: '',
 	writeRecordingsIntoAFolder: true,
 	recordingDirectory: '',
@@ -37,7 +36,7 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 }
 
 export default class NoteBuilder extends Plugin {
-	settings: MyPluginSettings;
+	settings: NoteBuilderPluginSettings;
 	ai: AI;
 	recorder: AudioRecorder | null = null;
 
@@ -50,7 +49,6 @@ export default class NoteBuilder extends Plugin {
 		this.addCommand({
 			id: 'create-memo',
 			name: 'Create memo',
-			hotkeys: [{ modifiers: ['Mod', 'Shift'], key: 'm' }],
 			callback: () => {
 				const memoModal = new MemoModal(this.app, this.settings, this.ai);
 				memoModal.open();
@@ -58,24 +56,15 @@ export default class NoteBuilder extends Plugin {
 		});
 
 		this.addCommand({
-			id: 'make-recording',
-			name: 'Make recording',
-			hotkeys: [{ modifiers: ['Mod', 'Shift'], key: 'r' }],
-			callback: () => new RecorderModal(this.app, this.settings).open()
-		})
-
-		this.addCommand({
-			id: 'custom-command',
-			name: 'Custom command',
-			hotkeys: [{ modifiers: ['Mod', 'Shift'], key: 'c' }],
+			id: 'custom-prompt',
+			name: 'Custom prompt',
 			callback: () => {
 				const customCommandModal = new CustomCommandModal(this.app, this.settings, this.ai);
 				customCommandModal.open();
 			},
 		});
 
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
+		this.addSettingTab(new NoteBuilderSettingTab(this.app, this));
 	}
 
 	onunload() {
@@ -92,190 +81,6 @@ export default class NoteBuilder extends Plugin {
 	}
 }
 
-class RecorderModal extends Modal {
-	private recordingButton: HTMLButtonElement;
-	private audioWaveform: HTMLCanvasElement;
-	private recorder: AudioRecorder | null = null;
-	private settings: MyPluginSettings;
-
-	// Upload state
-	private uploadedFile: File | null = null;
-	private uploadedArrayBuffer: ArrayBuffer | null = null;
-	private uploadedFileNameEl: HTMLElement | null = null;
-
-	// Visualizer
-	private audioVisualizer: AudioVisualizer | null = null;
-
-	constructor(app: App, settings: MyPluginSettings) {
-		super(app);
-		this.settings = settings;
-	}
-
-	async onOpen() {
-		const { contentEl } = this;
-		contentEl.empty();
-
-		// Modal-wide drop overlay
-		const dropOverlay = contentEl.createEl('div', { cls: 'modal-drop-overlay' });
-		dropOverlay.appendChild(
-			contentEl.createDiv({ cls: 'drop-message', text: 'Drop audio file to upload' })
-		);
-
-		let dragCounter = 0;
-		const showOverlay = () => { dropOverlay.classList.add('active'); };
-		const hideOverlay = () => { dropOverlay.classList.remove('active'); };
-
-		contentEl.ondragenter = (e) => {
-			e.preventDefault();
-			dragCounter++;
-			showOverlay();
-		};
-
-		contentEl.ondragleave = (e) => {
-			dragCounter--;
-			if (dragCounter <= 0) {
-				hideOverlay();
-				dragCounter = 0;
-			}
-		};
-
-		contentEl.ondragover = (e) => {
-			e.preventDefault();
-		};
-
-		dropOverlay.ondrop = (e) => {
-			e.preventDefault();
-			hideOverlay();
-			dragCounter = 0;
-			if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
-				handleFile(e.dataTransfer.files[0]);
-			}
-		};
-
-		const wrapper = contentEl.createEl('div', { cls: 'recording-wrapper' });
-		const titleSection = wrapper.createEl('div', { cls: 'recording-title-section' });
-
-		titleSection.createEl('h2', { text: 'Make recording', cls: 'recording-title' });
-		titleSection.createEl('p', { text: 'Record audio from your microphone or upload an audio file.', cls: 'recording-subtitle' });
-
-		// --- Microphone Recording Section ---
-		const micSection = wrapper.createEl('div', { cls: 'recording-mic-section' });
-		micSection.createEl('h3', { text: 'Microphone recording', cls: 'recording-mic-heading' });
-		const buttonSection = micSection.createEl('div', { cls: 'recording-button-section' });
-		this.recordingButton = buttonSection.createEl('button', { cls: 'recording-button start', attr: { 'aria-label': 'Start recording' } });
-		const uploadButton = buttonSection.createEl('button', { cls: 'recording-button upload-button', attr: { 'aria-label': 'Upload audio file' } });
-
-		this.audioWaveform = micSection.createEl('canvas', { cls: 'recording-waveform' });
-		this.audioWaveform.style.width = '100%';
-		this.audioWaveform.style.height = '120px';
-		this.audioWaveform.width = this.audioWaveform.offsetWidth;
-		this.audioWaveform.height = this.audioWaveform.offsetHeight;
-
-		window.onresize = () => {
-			this.audioWaveform.width = this.audioWaveform.offsetWidth;
-			this.audioWaveform.height = this.audioWaveform.offsetHeight;
-		};
-
-		this.audioVisualizer = new AudioVisualizer(this.audioWaveform);
-
-		const stopMicRecording = async () => {
-			if (!this.recorder) return;
-			let file: TFile | null = null;
-			const { arrayBuffer, audioFile } = await this.recorder.stopRecording();
-			if (!arrayBuffer || !audioFile) return;
-
-			// Save file if need
-			if (this.settings.writeRecordingsIntoAFolder) {
-				try {
-					file = await saveFile(
-						this.app,
-						this.settings.recordingDirectory,
-						arrayBuffer,
-						audioFile.name.split('.').pop() || 'wav',
-						'Recording-',
-						'YYYY-MM-DD_HH-mm'
-					);
-
-					new Notice(`Recording saved to ${file?.path}!`)
-
-					const editor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor;
-
-					if (editor && file) {
-						new Notice('Recording pasted to the current note.');
-						editor.replaceSelection(`![Recording](${file.path})`);
-					}
-				} catch (error) {
-					new Notice(`Recording failed: ${error.message}`);
-					console.error('Recording failed:', error);
-				} finally {
-					this.recorder = null;
-					this.close();
-				}
-			}
-		};
-
-		this.recordingButton.onclick = async ({ target }) => {
-			if (!target || !(target instanceof HTMLButtonElement)) return;
-			const action = target.classList.contains('start') ? 'start' : 'stop';
-			if (action === 'start') {
-				this.recorder = new AudioRecorder();
-				await this.recorder?.init();
-				this.recorder?.startRecording();
-				target.classList.replace('start', 'stop');
-				target.ariaLabel = 'Stop recording';
-				await this.audioVisualizer?.start();
-			} else {
-				target.classList.replace('stop', 'start');
-				target.ariaLabel = 'Start recording';
-				this.audioVisualizer?.stop();
-				stopMicRecording();
-			}
-		};
-
-		// --- Upload Section ---
-		const uploadSection = wrapper.createEl('div', { cls: 'recording-upload-section' });
-		const uploadInput = uploadSection.createEl('input', { type: 'file', attr: { accept: '.mp3,.wav,.m4a,audio/*' }, cls: 'recording-upload-input' });
-		uploadInput.style.display = 'none';
-		this.uploadedFileNameEl = uploadSection.createEl('span', { cls: 'recording-upload-filename' });
-
-		const handleFile = async (file: File) => {
-			const validTypes = ['audio/mp3', 'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/m4a', 'audio/x-m4a'];
-			const maxSize = 10 * 1024 * 1024; // 10MB
-			if (!validTypes.includes(file.type) && !['mp3', 'wav', 'm4a'].some(ext => file.name.toLowerCase().endsWith(ext))) {
-				new Notice('Unsupported audio format. Please upload mp3, wav, or m4a.');
-				return;
-			}
-
-			if (file.size > maxSize) {
-				new Notice('File is too large. Maximum size is 10MB.');
-				return;
-			}
-
-			this.uploadedFile = file;
-			this.uploadedArrayBuffer = await file.arrayBuffer();
-			if (this.uploadedFileNameEl) this.uploadedFileNameEl.textContent = `Selected: ${file.name}`;
-		};
-
-		uploadButton.onclick = () => uploadInput.click();
-		uploadInput.onchange = async (e: Event) => {
-			const files = (e.target as HTMLInputElement).files;
-			if (files && files.length > 0) {
-				handleFile(files[0]);
-			}
-		};
-	}
-
-	async onClose() {
-		const { contentEl } = this;
-		contentEl.empty();
-		this.recorder = null;
-		this.audioVisualizer?.stop();
-		this.uploadedFile = null;
-		this.uploadedArrayBuffer = null;
-		if (this.uploadedFileNameEl) this.uploadedFileNameEl.textContent = '';
-	}
-}
-
 
 class MemoModal extends Modal {
 	private recordingButton: HTMLButtonElement;
@@ -286,7 +91,7 @@ class MemoModal extends Modal {
 	private mergeToggle: HTMLInputElement;
 	private saveVoiceCheckbox: HTMLInputElement;
 	private audioRecorder: AudioRecorder | null = null;
-	private settings: MyPluginSettings;
+	private settings: NoteBuilderPluginSettings;
 	private textField: HTMLTextAreaElement;
 	private summaryField: HTMLTextAreaElement;
 	private tasksField: HTMLTextAreaElement;
@@ -301,7 +106,7 @@ class MemoModal extends Modal {
 	private uploadedArrayBuffer: ArrayBuffer | null = null;
 	private uploadedFileNameEl: HTMLElement | null = null;
 
-	constructor(app: App, settings: MyPluginSettings, ai: AI) {
+	constructor(app: App, settings: NoteBuilderPluginSettings, ai: AI) {
 		super(app);
 		this.settings = settings;
 		this.ai = ai;
@@ -375,7 +180,6 @@ class MemoModal extends Modal {
 		// --- Upload UI ---
 		const uploadSection = wrapper.createEl('div', { cls: 'recording-upload-section' });
 		const uploadInput = uploadSection.createEl('input', { type: 'file', attr: { accept: '.mp3,.wav,.m4a,audio/*' }, cls: 'recording-upload-input' });
-		uploadInput.style.display = 'none';
 		this.uploadedFileNameEl = uploadSection.createEl('span', { cls: 'recording-upload-filename' });
 
 		const handleFile = async (file: File) => {
@@ -647,7 +451,7 @@ class CustomCommandModal extends Modal {
 	private processButton: HTMLButtonElement;
 	private insertButton: HTMLButtonElement;
 	private audioRecorder: AudioRecorder | null = null;
-	private settings: MyPluginSettings;
+	private settings: NoteBuilderPluginSettings;
 	private transcriptionField: HTMLTextAreaElement;
 	private customPromptField: HTMLTextAreaElement;
 	private resultField: HTMLTextAreaElement;
@@ -660,7 +464,7 @@ class CustomCommandModal extends Modal {
 	private uploadedArrayBuffer: ArrayBuffer | null = null;
 	private uploadedFileNameEl: HTMLElement | null = null;
 
-	constructor(app: App, settings: MyPluginSettings, ai: AI) {
+	constructor(app: App, settings: NoteBuilderPluginSettings, ai: AI) {
 		super(app);
 		this.settings = settings;
 		this.ai = ai;
@@ -734,7 +538,6 @@ class CustomCommandModal extends Modal {
 		// --- Upload UI ---
 		const uploadSection = wrapper.createEl('div', { cls: 'recording-upload-section' });
 		const uploadInput = uploadSection.createEl('input', { type: 'file', attr: { accept: '.mp3,.wav,.m4a,audio/*' }, cls: 'recording-upload-input' });
-		uploadInput.style.display = 'none';
 		this.uploadedFileNameEl = uploadSection.createEl('span', { cls: 'recording-upload-filename' });
 
 		const handleFile = async (file: File) => {
@@ -918,7 +721,7 @@ class CustomCommandModal extends Modal {
 	}
 }
 
-class SampleSettingTab extends PluginSettingTab {
+class NoteBuilderSettingTab extends PluginSettingTab {
 	plugin: NoteBuilder;
 
 	constructor(app: App, plugin: NoteBuilder) {
@@ -977,7 +780,7 @@ class SampleSettingTab extends PluginSettingTab {
 					}));
 		}
 
-		containerEl.createEl('h3', { text: 'Audio Memo Settings' }).style.marginTop = '1.5rem';
+		containerEl.createEl('h3', { text: 'Audio Memo Settings', cls: 'note-builder-settings-title' });
 
 		new Setting(containerEl)
 			.setName('Transcription model')
