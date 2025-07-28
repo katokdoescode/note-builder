@@ -268,6 +268,36 @@ If your plugin does not need CSS, delete this file.
 	background-color: var(--interactive-accent-active);
 }
 
+/* Smart Memo Modal Styles */
+.smart-memo-section {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+	margin-bottom: 1rem;
+}
+
+.smart-memo-label {
+	font-size: 0.9rem;
+	font-weight: 600;
+	color: var(--text-muted);
+	margin: 0;
+}
+
+.smart-memo-field {
+	min-height: 200px;
+}
+
+.smart-memo-status {
+	padding: 0.5rem;
+	margin: 0.5rem 0;
+	background: var(--background-secondary);
+	border-radius: var(--radius-s);
+	text-align: center;
+	font-weight: 500;
+	color: var(--text-muted);
+	min-height: 1.5rem;
+}
+
 /* Settings */
 
 .note-builder-settings-title {

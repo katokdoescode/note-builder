@@ -5,6 +5,7 @@ import { AudioRecorder } from 'src/utils/recording';
 import { DEFAULT_SUMMARY_PROMPT, DEFAULT_SUMMARY_FORMAT } from './src/prompts/summary';
 import { DEFAULT_TASKS_FORMAT, DEFAULT_TASKS_PROMPT } from 'src/prompts/tasks';
 import { DEFAULT_REFLEX_PROMPT, DEFAULT_REFLEX_FORMAT } from 'src/prompts/reflex';
+import { DEFAULT_SMART_MEMO_PROMPT, DEFAULT_SMART_MEMO_FORMAT } from 'src/prompts/smartmemo';
 
 interface NoteBuilderPluginSettings {
 	openaiApiKey: string;
@@ -17,6 +18,8 @@ interface NoteBuilderPluginSettings {
 	tasksOutputFormat: string;
 	reflexCustomPrompt: string;
 	reflexOutputFormat: string;
+	smartMemoCustomPrompt: string;
+	smartMemoOutputFormat: string;
 	modelSettings: ModelSettings;
 
 }
@@ -32,6 +35,8 @@ const DEFAULT_SETTINGS: NoteBuilderPluginSettings = {
 	tasksOutputFormat: DEFAULT_TASKS_FORMAT,
 	reflexCustomPrompt: DEFAULT_REFLEX_PROMPT,
 	reflexOutputFormat: DEFAULT_REFLEX_FORMAT,
+	smartMemoCustomPrompt: DEFAULT_SMART_MEMO_PROMPT,
+	smartMemoOutputFormat: DEFAULT_SMART_MEMO_FORMAT,
 	modelSettings: defaultModelSettings
 }
 
@@ -61,6 +66,15 @@ export default class NoteBuilder extends Plugin {
 			callback: () => {
 				const customCommandModal = new CustomCommandModal(this.app, this.settings, this.ai);
 				customCommandModal.open();
+			},
+		});
+
+		this.addCommand({
+			id: 'smart-memo',
+			name: 'Smart memo',
+			callback: () => {
+				const smartMemoModal = new SmartMemoModal(this.app, this.settings, this.ai);
+				smartMemoModal.open();
 			},
 		});
 
@@ -721,6 +735,277 @@ class CustomCommandModal extends Modal {
 	}
 }
 
+class SmartMemoModal extends Modal {
+	private recordingButton: HTMLButtonElement;
+	private saveButton: HTMLButtonElement;
+	private saveVoiceCheckbox: HTMLInputElement;
+	private statusEl: HTMLElement;
+	private audioRecorder: AudioRecorder | null = null;
+	private settings: NoteBuilderPluginSettings;
+	private formattedField: HTMLTextAreaElement;
+	private recordingFile: File | null = null;
+	private arrayBuffer: ArrayBuffer | null = null;
+	private ai: AI;
+
+	// Upload state
+	private uploadedFile: File | null = null;
+	private uploadedArrayBuffer: ArrayBuffer | null = null;
+	private uploadedFileNameEl: HTMLElement | null = null;
+
+	constructor(app: App, settings: NoteBuilderPluginSettings, ai: AI) {
+		super(app);
+		this.settings = settings;
+		this.ai = ai;
+	}
+
+	onOpen() {
+		const { contentEl } = this;
+		contentEl.empty();
+
+		// Modal-wide drop overlay
+		const dropOverlay = contentEl.createEl('div', { cls: 'modal-drop-overlay' });
+		dropOverlay.appendChild(
+			contentEl.createDiv({ cls: 'drop-message', text: 'Drop audio file to upload' })
+		);
+
+		let dragCounter = 0;
+		const showOverlay = () => { dropOverlay.classList.add('active'); };
+		const hideOverlay = () => { dropOverlay.classList.remove('active'); };
+
+		contentEl.ondragenter = (e) => {
+			e.preventDefault();
+			dragCounter++;
+			showOverlay();
+		};
+
+		contentEl.ondragleave = (e) => {
+			dragCounter--;
+			if (dragCounter <= 0) {
+				hideOverlay();
+				dragCounter = 0;
+			}
+		};
+
+		contentEl.ondragover = (e) => {
+			e.preventDefault();
+		};
+
+		dropOverlay.ondrop = (e) => {
+			e.preventDefault();
+			hideOverlay();
+			dragCounter = 0;
+			if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+				handleFile(e.dataTransfer.files[0]);
+			}
+		};
+
+		const wrapper = contentEl.createEl('div', { cls: 'recording-wrapper' });
+		const titleSection = wrapper.createEl('div', { cls: 'recording-title-section' });
+
+		titleSection.createEl('h3', { text: 'Smart Memo', cls: 'recording-title' });
+		titleSection.createEl('p', { text: 'Record audio and automatically create a formatted note', cls: 'recording-subtitle' });
+
+		const container = wrapper.createEl('div', { cls: 'recording-container' });
+
+		const buttonSection = container.createEl('div', { cls: 'recording-button-section col' });
+		const glowingWrapper = buttonSection.createEl('div', { cls: 'glowing-wrapper' });
+
+		this.recordingButton = glowingWrapper.createEl(
+			'button',
+			{
+				cls: 'recording-button start',
+				attr: { 'aria-label': 'Start recording' }
+			}
+		);
+
+		const uploadButton = buttonSection.createEl('button', {
+			cls: 'recording-button upload-button',
+			attr: { 'aria-label': 'Upload audio file' }
+		});
+
+		// --- Upload UI ---
+		const uploadSection = wrapper.createEl('div', { cls: 'recording-upload-section' });
+		const uploadInput = uploadSection.createEl('input', { type: 'file', attr: { accept: '.mp3,.wav,.m4a,audio/*' }, cls: 'recording-upload-input' });
+		this.uploadedFileNameEl = uploadSection.createEl('span', { cls: 'recording-upload-filename' });
+
+		// Status display
+		this.statusEl = wrapper.createEl('div', { cls: 'smart-memo-status' });
+
+		const handleFile = async (file: File) => {
+			const validTypes = ['audio/mp3', 'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/m4a', 'audio/x-m4a'];
+			const maxSize = 10 * 1024 * 1024; // 10MB
+			if (!validTypes.includes(file.type) && !['mp3', 'wav', 'm4a'].some(ext => file.name.toLowerCase().endsWith(ext))) {
+				new Notice('Unsupported audio format. Please upload mp3, wav, or m4a.');
+				return;
+			}
+			if (file.size > maxSize) {
+				new Notice('File is too large. Maximum size is 10MB.');
+				return;
+			}
+			this.uploadedFile = file;
+			this.uploadedArrayBuffer = await file.arrayBuffer();
+			if (this.uploadedFileNameEl) this.uploadedFileNameEl.textContent = `Selected: ${file.name}`;
+
+			// Auto-process the file
+			await this.processAudio(file, this.uploadedArrayBuffer);
+		};
+
+		uploadButton.onclick = () => uploadInput.click();
+		uploadInput.onchange = async (e: Event) => {
+			const files = (e.target as HTMLInputElement).files;
+			if (files && files.length > 0) {
+				handleFile(files[0]);
+			}
+		};
+
+		const editorsWrapper = container.createEl('div', { cls: 'recording-editors' });
+
+		// Formatted note field
+		const formattedSection = editorsWrapper.createEl('div', { cls: 'smart-memo-section' });
+		formattedSection.createEl('h4', { text: 'Formatted Note', cls: 'smart-memo-label' });
+		this.formattedField = formattedSection.createEl(
+			'textarea',
+			{
+				cls: 'recording-textfield smart-memo-field',
+				attr: { 'aria-label': 'Formatted Note', 'placeholder': 'Your formatted note will appear here...' }
+			}
+		);
+
+		const controlsPanel = wrapper.createEl('div', { cls: 'recording-controls' });
+		const options = controlsPanel.createEl('div', { cls: 'recording-options' });
+		const actions = controlsPanel.createEl('div', { cls: 'recording-actions' });
+
+		const saveVoiceLabel = options.createEl('label', { cls: 'recording-merge-label', attr: { 'for': 'save-voice-checkbox-smart' } });
+		saveVoiceLabel.createEl('span', { text: 'Save voice memo to file and attach link' });
+		this.saveVoiceCheckbox = saveVoiceLabel.createEl('input', {
+			cls: 'save-voice-checkbox',
+			type: 'checkbox',
+			attr: {
+				'id': 'save-voice-checkbox-smart',
+				'aria-label': 'Save voice memo to file and attach link'
+			}
+		});
+		this.saveVoiceCheckbox.checked = true; // Default to true for Smart Memo
+
+		this.saveButton = actions.createEl('button', {
+			cls: 'recording-button save',
+			text: 'Save to Note',
+		});
+		this.saveButton.disabled = true; // Initially disabled
+
+		this.recordingButton.onclick = async () => {
+			if (this.recordingButton.classList.contains('start')) {
+				this.recordingButton.classList.replace('start', 'stop');
+				this.recordingButton.ariaLabel = 'Stop recording';
+				this.statusEl.textContent = 'Recording...';
+				this.audioRecorder = new AudioRecorder();
+				await this.audioRecorder.init();
+				this.audioRecorder.startRecording();
+			} else if (this.audioRecorder) {
+				try {
+					this.statusEl.textContent = 'Stopping recording...';
+					const { audioFile, arrayBuffer } = await this.audioRecorder.stopRecording();
+					this.recordingFile = audioFile;
+					this.arrayBuffer = arrayBuffer;
+
+					// Auto-process the recording
+					await this.processAudio(audioFile, arrayBuffer);
+				} catch (error) {
+					new Notice(`Recording error: ${error.message}`);
+					console.error('Recording error:', error);
+					this.statusEl.textContent = 'Recording failed';
+				} finally {
+					this.recordingButton.classList.replace('stop', 'start');
+					this.recordingButton.ariaLabel = 'Start recording';
+				}
+			}
+		};
+
+		this.saveButton.onclick = async () => {
+			if (!this.formattedField.value.trim()) {
+				new Notice('No formatted note to save.');
+				return;
+			}
+
+			const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+			if (!activeView) {
+				new Notice('No active note to save to.');
+				return;
+			}
+
+			try {
+				const editor = activeView.editor;
+				let content = this.formattedField.value + '\n\n';
+
+				// Save voice file if checkbox is checked and we have audio
+				if (this.saveVoiceCheckbox.checked && this.recordingFile && this.arrayBuffer) {
+					try {
+						const file = await saveFile(
+							this.app,
+							this.settings.recordingDirectory,
+							this.arrayBuffer,
+							this.recordingFile.name.split('.').pop() || 'wav',
+							'smart-memo-',
+						);
+						const fileLink = `![](${file.path})\n\n`;
+						content = fileLink + content;
+						new Notice(`Recording saved to ${file.path}!`);
+					} catch (error) {
+						new Notice(`Recording save failed: ${error.message}`);
+						console.error('Recording save failed:', error);
+					}
+				}
+
+				editor.replaceSelection(content);
+				new Notice('Smart memo saved to the current note.');
+				this.close();
+			} catch (error) {
+				new Notice(`Save error: ${error.message}`);
+				console.error('Save error:', error);
+			}
+		};
+	}
+
+	private async processAudio(audioFile: File, arrayBuffer: ArrayBuffer) {
+		try {
+			// Step 1: Transcribe
+			this.statusEl.textContent = 'Transcribing audio...';
+			const transcription = await this.ai.transcribe(audioFile);
+
+			// Step 2: Format with Smart Memo
+			this.statusEl.textContent = 'Formatting note...';
+			this.formattedField.classList.add('inner-glowing');
+			const formattedNote = await this.ai.generateSmartMemo(
+				transcription,
+				this.settings.smartMemoCustomPrompt,
+				this.settings.smartMemoOutputFormat
+			);
+
+			this.formattedField.value = formattedNote;
+			this.saveButton.disabled = false;
+			this.statusEl.textContent = 'Ready to save!';
+
+		} catch (error) {
+			new Notice(`Processing error: ${error.message}`);
+			console.error('Processing error:', error);
+			this.statusEl.textContent = 'Processing failed';
+		} finally {
+			this.formattedField.classList.remove('inner-glowing');
+		}
+	}
+
+	onClose() {
+		const { contentEl } = this;
+		contentEl.empty();
+		this.audioRecorder?.stopRecording();
+		this.audioRecorder = null;
+		this.uploadedFile = null;
+		this.uploadedArrayBuffer = null;
+		if (this.uploadedFileNameEl) this.uploadedFileNameEl.textContent = '';
+		if (this.saveVoiceCheckbox) this.saveVoiceCheckbox.checked = true;
+	}
+}
+
 class NoteBuilderSettingTab extends PluginSettingTab {
 	plugin: NoteBuilder;
 
@@ -898,6 +1183,39 @@ class NoteBuilderSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.modelSettings.customResponseModel)
 				.onChange(async (value) => {
 					this.plugin.settings.modelSettings.customResponseModel = value;
+					await this.plugin.saveSettings();
+				})
+			)
+
+		containerEl.createEl('h3', { text: 'Smart Memo Settings', cls: 'note-builder-settings-title' });
+
+		new Setting(containerEl)
+			.setName('Smart memo custom prompt')
+			.setDesc('Enter a custom prompt for Smart Memo formatting, or leave empty for default')
+			.addTextArea(text => text
+				.setValue(this.plugin.settings.smartMemoCustomPrompt)
+				.onChange(async (value) => {
+					this.plugin.settings.smartMemoCustomPrompt = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Smart memo output format')
+			.addTextArea(text => text
+				.setValue(this.plugin.settings.smartMemoOutputFormat)
+				.onChange(async (value) => {
+					this.plugin.settings.smartMemoOutputFormat = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Smart memo model')
+			.setDesc('Enter a model name, or leave empty to use "gpt-4o-mini" by default')
+			.addText(text => text
+				.setPlaceholder('gpt-4o-mini, etc.')
+				.setValue(this.plugin.settings.modelSettings.smartMemoModel)
+				.onChange(async (value) => {
+					this.plugin.settings.modelSettings.smartMemoModel = value;
 					await this.plugin.saveSettings();
 				})
 			)
