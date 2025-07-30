@@ -1,4 +1,4 @@
-# Obsidian Note Builder
+# Note Builder
 
 This plugin is designed to easily and quickly create new notes and tasks using voice input and LLM capabilities.
 
