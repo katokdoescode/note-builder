@@ -966,28 +966,86 @@ class SmartMemoModal extends Modal {
 		};
 	}
 
-	private async processAudio(audioFile: File, arrayBuffer: ArrayBuffer) {
+	private async processAudio(audioFile: File) {
+		let transcription: string | null = null;
+
 		try {
 			// Step 1: Transcribe
 			this.statusEl.textContent = 'Transcribing audio...';
-			const transcription = await this.ai.transcribe(audioFile);
+
+			try {
+				transcription = await this.ai.transcribe(audioFile);
+			} catch (transcribeError) {
+				const errorMessage = transcribeError.message || String(transcribeError);
+
+				// Check for specific error types
+				if (errorMessage.includes('timeout') || errorMessage.includes('timed out')) {
+					new Notice('Transcription timeout: File may be too large. Try a shorter recording.');
+				} else if (errorMessage.includes('size') || errorMessage.includes('limit')) {
+					new Notice('File size error: Audio file exceeds API limits (max 25MB for Whisper).');
+				} else if (errorMessage.includes('format') || errorMessage.includes('unsupported')) {
+					new Notice(`Unsupported audio format: ${audioFile.type}`);
+				} else if (errorMessage.includes('network') || errorMessage.includes('fetch')) {
+					new Notice('Network error during transcription. Check your connection.');
+				} else {
+					new Notice(`Transcription failed: ${errorMessage}`);
+				}
+
+				this.statusEl.textContent = 'Transcription failed';
+				return;
+			}
+
+			if (!transcription || transcription.trim().length === 0) {
+				new Notice('Transcription returned empty. The audio may be silent or unclear.');
+				this.statusEl.textContent = 'No transcription generated';
+				return;
+			}
 
 			// Step 2: Format with Smart Memo
 			this.statusEl.textContent = 'Formatting note...';
 			this.formattedField.classList.add('inner-glowing');
-			const formattedNote = await this.ai.generateSmartMemo(
-				transcription,
-				this.settings.smartMemoCustomPrompt,
-				this.settings.smartMemoOutputFormat
-			);
 
-			this.formattedField.value = formattedNote;
-			this.saveButton.disabled = false;
-			this.statusEl.textContent = 'Ready to save!';
+			try {
+				const formattedNote = await this.ai.generateSmartMemo(
+					transcription,
+					this.settings.smartMemoCustomPrompt,
+					this.settings.smartMemoOutputFormat
+				);
+
+				if (!formattedNote || formattedNote.trim().length === 0) {
+					new Notice('Smart Memo generation returned empty result.');
+					this.statusEl.textContent = 'Formatting failed';
+					return;
+				}
+
+				this.formattedField.value = formattedNote;
+				this.saveButton.disabled = false;
+				this.statusEl.textContent = 'Ready to save!';
+
+			} catch (formatError) {
+				const errorMessage = formatError.message || String(formatError);
+
+				// Check for specific error types
+				if (errorMessage.includes('timeout') || errorMessage.includes('timed out')) {
+					new Notice('Formatting timeout: Response generation took too long. Try again.');
+				} else if (errorMessage.includes('token') || errorMessage.includes('length')) {
+					new Notice('Content too large: Transcription exceeds model token limits.');
+				} else if (errorMessage.includes('rate') || errorMessage.includes('quota')) {
+					new Notice('API rate limit reached. Wait a moment and try again.');
+				} else if (errorMessage.includes('network') || errorMessage.includes('fetch')) {
+					new Notice('Network error during formatting. Check your connection.');
+				} else {
+					new Notice(`Formatting failed: ${errorMessage}`);
+				}
+
+				this.statusEl.textContent = 'Formatting failed';
+				return;
+			}
 
 		} catch (error) {
-			new Notice(`Processing error: ${error.message}`);
-			console.error('Processing error:', error);
+			// Catch-all for any unexpected errors
+			const errorMessage = error.message || String(error);
+			new Notice(`Unexpected error: ${errorMessage}`);
 			this.statusEl.textContent = 'Processing failed';
 		} finally {
 			this.formattedField.classList.remove('inner-glowing');
