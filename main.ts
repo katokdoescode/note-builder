@@ -198,13 +198,13 @@ class MemoModal extends Modal {
 
 		const handleFile = async (file: File) => {
 			const validTypes = ['audio/mp3', 'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/m4a', 'audio/x-m4a'];
-			const maxSize = 10 * 1024 * 1024; // 10MB
+			const maxSize = 100 * 1024 * 1024; // 100MB
 			if (!validTypes.includes(file.type) && !['mp3', 'wav', 'm4a'].some(ext => file.name.toLowerCase().endsWith(ext))) {
 				new Notice('Unsupported audio format. Please upload mp3, wav, or m4a.');
 				return;
 			}
 			if (file.size > maxSize) {
-				new Notice('File is too large. Maximum size is 10MB.');
+				new Notice('File is too large. Maximum size is 100MB.');
 				return;
 			}
 			this.uploadedFile = file;
@@ -528,7 +528,7 @@ class CustomCommandModal extends Modal {
 		const wrapper = contentEl.createEl('div', { cls: 'recording-wrapper' });
 		const titleSection = wrapper.createEl('div', { cls: 'recording-title-section' });
 
-		titleSection.createEl('h3', { text: 'Custom Command', cls: 'recording-title' });
+		titleSection.createEl('h3', { text: 'Custom command', cls: 'recording-title' });
 		titleSection.createEl('p', { text: 'Record or upload audio, then use a custom prompt to process the transcription', cls: 'recording-subtitle' });
 
 		const container = wrapper.createEl('div', { cls: 'recording-container' });
@@ -556,13 +556,13 @@ class CustomCommandModal extends Modal {
 
 		const handleFile = async (file: File) => {
 			const validTypes = ['audio/mp3', 'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/m4a', 'audio/x-m4a'];
-			const maxSize = 10 * 1024 * 1024; // 10MB
+			const maxSize = 100 * 1024 * 1024; // 100MB
 			if (!validTypes.includes(file.type) && !['mp3', 'wav', 'm4a'].some(ext => file.name.toLowerCase().endsWith(ext))) {
 				new Notice('Unsupported audio format. Please upload mp3, wav, or m4a.');
 				return;
 			}
 			if (file.size > maxSize) {
-				new Notice('File is too large. Maximum size is 10MB.');
+				new Notice('File is too large. Maximum size is 100MB.');
 				return;
 			}
 			this.uploadedFile = file;
@@ -605,23 +605,23 @@ class CustomCommandModal extends Modal {
 
 		// Custom prompt field
 		const promptSection = editorsWrapper.createEl('div', { cls: 'custom-command-section' });
-		promptSection.createEl('h4', { text: 'Custom Prompt', cls: 'custom-command-label' });
+		promptSection.createEl('h4', { text: 'Custom prompt', cls: 'custom-command-label' });
 		this.customPromptField = promptSection.createEl(
 			'textarea',
 			{
 				cls: 'recording-textfield custom-prompt-field',
-				attr: { 'aria-label': 'Custom Prompt', 'placeholder': 'Enter your custom prompt here...' }
+				attr: { 'aria-label': 'Custom prompt', 'placeholder': 'Enter your custom prompt here...' }
 			}
 		);
 
 		// Result field
 		const resultSection = editorsWrapper.createEl('div', { cls: 'custom-command-section' });
-		resultSection.createEl('h4', { text: 'Result Preview', cls: 'custom-command-label' });
+		resultSection.createEl('h4', { text: 'Result preview', cls: 'custom-command-label' });
 		this.resultField = resultSection.createEl(
 			'textarea',
 			{
 				cls: 'recording-textfield result-field',
-				attr: { 'aria-label': 'Result Preview', 'placeholder': 'Processing result will appear here...' }
+				attr: { 'aria-label': 'Result preview', 'placeholder': 'Processing result will appear here...' }
 			}
 		);
 
@@ -635,7 +635,7 @@ class CustomCommandModal extends Modal {
 
 		this.insertButton = actions.createEl('button', {
 			cls: 'recording-button insert',
-			text: 'Insert to Note',
+			text: 'Insert to note',
 		});
 		this.insertButton.disabled = true; // Initially disabled until we have a result
 
@@ -1018,7 +1018,6 @@ class NoteBuilderSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 
 		containerEl.empty();
-		containerEl.createEl('h3', { text: 'General Settings' });
 
 		new Setting(containerEl)
 			.setName('Open AI API key')
@@ -1065,7 +1064,9 @@ class NoteBuilderSettingTab extends PluginSettingTab {
 					}));
 		}
 
-		containerEl.createEl('h3', { text: 'Audio Memo Settings', cls: 'note-builder-settings-title' });
+		new Setting(containerEl)
+			.setName('Audio memo')
+			.setHeading();
 
 		new Setting(containerEl)
 			.setName('Transcription model')
