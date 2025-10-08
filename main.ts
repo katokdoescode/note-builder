@@ -833,13 +833,13 @@ class SmartMemoModal extends Modal {
 
 		const handleFile = async (file: File) => {
 			const validTypes = ['audio/mp3', 'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/m4a', 'audio/x-m4a'];
-			const maxSize = 10 * 1024 * 1024; // 10MB
+			const maxSize = 100 * 1024 * 1024; // 100MB
 			if (!validTypes.includes(file.type) && !['mp3', 'wav', 'm4a'].some(ext => file.name.toLowerCase().endsWith(ext))) {
 				new Notice('Unsupported audio format. Please upload mp3, wav, or m4a.');
 				return;
 			}
 			if (file.size > maxSize) {
-				new Notice('File is too large. Maximum size is 10MB.');
+				new Notice('File is too large. Maximum size is 100MB.');
 				return;
 			}
 			this.uploadedFile = file;
