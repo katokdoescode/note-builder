@@ -847,7 +847,7 @@ class SmartMemoModal extends Modal {
 			if (this.uploadedFileNameEl) this.uploadedFileNameEl.textContent = `Selected: ${file.name}`;
 
 			// Auto-process the file
-			await this.processAudio(file, this.uploadedArrayBuffer);
+			await this.processAudio(file);
 		};
 
 		uploadButton.onclick = () => uploadInput.click();
@@ -909,7 +909,7 @@ class SmartMemoModal extends Modal {
 					this.arrayBuffer = arrayBuffer;
 
 					// Auto-process the recording
-					await this.processAudio(audioFile, arrayBuffer);
+					await this.processAudio(audioFile);
 				} catch (error) {
 					new Notice(`Recording error: ${error.message}`);
 					console.error('Recording error:', error);
