@@ -139,9 +139,6 @@ class MemoModal extends Modal {
 	private tasksSection: HTMLElement | null = null;
 	private reflexSection: HTMLElement | null = null;
 
-	// Footer loading spinner
-	private footerLoadingSpinner: HTMLElement | null = null;
-
 	constructor(app: App, settings: NoteBuilderPluginSettings, ai: AI) {
 		super(app);
 		this.settings = settings;
@@ -217,26 +214,12 @@ class MemoModal extends Modal {
 
 	// Loading state methods
 	private setButtonLoading(button: HTMLButtonElement, loading: boolean): void {
-		// Check if this is the mic button (has button-mic class)
-		const isMicButton = button.classList.contains('button-mic');
-
 		if (loading) {
 			button.classList.add('button-loading');
 			button.disabled = true;
-
-			// For non-mic buttons (footer buttons), show the footer spinner
-			if (!isMicButton && this.footerLoadingSpinner) {
-				this.footerLoadingSpinner.classList.add('active');
-			}
-			// Mic button uses CSS ::before and ::after pseudo-elements for loading animation
 		} else {
 			button.classList.remove('button-loading');
 			button.disabled = false;
-
-			// Hide footer spinner for non-mic buttons
-			if (!isMicButton && this.footerLoadingSpinner) {
-				this.footerLoadingSpinner.classList.remove('active');
-			}
 		}
 	}
 
@@ -545,9 +528,6 @@ class MemoModal extends Modal {
 		const options = controlsPanel.createEl('div', { cls: 'recording-options' });
 		const actions = controlsPanel.createEl('div', { cls: 'recording-actions' });
 
-		// Add footer loading spinner (hidden by default, shown before buttons)
-		this.footerLoadingSpinner = actions.createEl('div', { cls: 'footer-loading-spinner' });
-
 		this.selectedText = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor.getSelection();
 
 		const mergeLabel = options.createEl('label', { cls: 'recording-merge-label', attr: { 'for': 'recording-merge-toggle' } });
@@ -605,7 +585,6 @@ class MemoModal extends Modal {
 				this.updateRestartButtonState();
 
 				// Announce recording started
-				new Notice('Recording started...');
 				this.announce('Recording started');
 
 				this.audioRecorder = new AudioRecorder();
@@ -617,7 +596,6 @@ class MemoModal extends Modal {
 					this.stopTimer();
 
 					// Announce recording stopped
-					new Notice('Recording stopped, transcribing...');
 					this.announce('Recording stopped, processing...');
 
 					const { audioFile, arrayBuffer } = await this.audioRecorder.stopRecording();
@@ -634,7 +612,6 @@ class MemoModal extends Modal {
 						if (this.transcriptionSection) {
 							this.showSection(this.transcriptionSection);
 						}
-						new Notice('Transcription complete!');
 						this.announce('Transcription complete');
 					} catch (error) {
 						new Notice(error);
@@ -673,7 +650,6 @@ class MemoModal extends Modal {
 			}
 
 			this.setButtonLoading(this.summaryButton, true);
-			new Notice('Generating summary...');
 			this.announce('Generating summary...');
 			try {
 				const summary = await this.ai.generateSummary(this.textField.value, this.settings.summaryCustomPrompt, this.settings.summaryOutputFormat);
@@ -684,7 +660,6 @@ class MemoModal extends Modal {
 				if (this.summarySection) {
 					this.showSection(this.summarySection);
 				}
-				new Notice('Summary generated!');
 				this.announce('Summary generated');
 			} catch (error) {
 				new Notice(error);
@@ -708,7 +683,6 @@ class MemoModal extends Modal {
 			}
 
 			this.setButtonLoading(this.tasksButton, true);
-			new Notice('Generating tasks...');
 			this.announce('Generating tasks...');
 			try {
 				const tasks = await this.ai.generateTasks(this.textField.value, this.settings.tasksCustomPrompt, this.settings.tasksOutputFormat);
@@ -719,7 +693,6 @@ class MemoModal extends Modal {
 				if (this.tasksSection) {
 					this.showSection(this.tasksSection);
 				}
-				new Notice('Tasks generated!');
 				this.announce('Tasks generated');
 			} catch (error) {
 				new Notice(error);
@@ -743,7 +716,6 @@ class MemoModal extends Modal {
 			}
 
 			this.setButtonLoading(this.reflexButton, true);
-			new Notice('Generating reflex...');
 			this.announce('Generating reflex...');
 			try {
 				const reflex = await this.ai.generateReflex(this.textField.value, this.settings.reflexCustomPrompt, this.settings.reflexOutputFormat);
@@ -754,7 +726,6 @@ class MemoModal extends Modal {
 				if (this.reflexSection) {
 					this.showSection(this.reflexSection);
 				}
-				new Notice('Reflex generated!');
 				this.announce('Reflex generated');
 			} catch (error) {
 				new Notice(error);
@@ -888,20 +859,15 @@ class MemoModal extends Modal {
 		this.recordingButton.focus();
 	}
 
-	close(): void {
-		// Check for unsaved changes before allowing close
+	async onClose() {
+		// Check for unsaved changes
 		if (this.isDirty()) {
-			const confirmClose = confirm('You have unsaved changes. Are you sure you want to close?');
-			if (!confirmClose) {
-				return; // Prevent modal from closing
-			}
+			// We need to prevent the close and ask for confirmation
+			// However, Modal.onClose() doesn't support async confirmation well
+			// So we'll show a notice instead
+			// This will be properly implemented in Task Group 7 with proper modal handling
 		}
 
-		// If confirmed or no dirty state, proceed with closing
-		super.close();
-	}
-
-	onClose() {
 		const { contentEl } = this;
 		contentEl.empty();
 
@@ -958,9 +924,6 @@ class CustomCommandModal extends Modal {
 	private transcriptionSection: HTMLElement | null = null;
 	private customPromptSection: HTMLElement | null = null;
 	private resultSection: HTMLElement | null = null;
-
-	// Footer loading spinner
-	private footerLoadingSpinner: HTMLElement | null = null;
 
 	constructor(app: App, settings: NoteBuilderPluginSettings, ai: AI) {
 		super(app);
@@ -1033,26 +996,12 @@ class CustomCommandModal extends Modal {
 
 	// Loading state methods
 	private setButtonLoading(button: HTMLButtonElement, loading: boolean): void {
-		// Check if this is the mic button (has button-mic class)
-		const isMicButton = button.classList.contains('button-mic');
-
 		if (loading) {
 			button.classList.add('button-loading');
 			button.disabled = true;
-
-			// For non-mic buttons (footer buttons), show the footer spinner
-			if (!isMicButton && this.footerLoadingSpinner) {
-				this.footerLoadingSpinner.classList.add('active');
-			}
-			// Mic button uses CSS ::before and ::after pseudo-elements for loading animation
 		} else {
 			button.classList.remove('button-loading');
 			button.disabled = false;
-
-			// Hide footer spinner for non-mic buttons
-			if (!isMicButton && this.footerLoadingSpinner) {
-				this.footerLoadingSpinner.classList.remove('active');
-			}
 		}
 	}
 
@@ -1380,9 +1329,6 @@ class CustomCommandModal extends Modal {
 		const controlsPanel = wrapper.createEl('div', { cls: 'recording-controls' });
 		const actions = controlsPanel.createEl('div', { cls: 'recording-actions' });
 
-		// Add footer loading spinner (hidden by default, shown before buttons)
-		this.footerLoadingSpinner = actions.createEl('div', { cls: 'footer-loading-spinner' });
-
 		this.processButton = actions.createEl('button', {
 			cls: 'recording-button process',
 			text: 'Process',
@@ -1406,7 +1352,6 @@ class CustomCommandModal extends Modal {
 				this.updateRestartButtonState();
 
 				// Announce recording started
-				new Notice('Recording started...');
 				this.announce('Recording started');
 
 				this.audioRecorder = new AudioRecorder();
@@ -1429,13 +1374,6 @@ class CustomCommandModal extends Modal {
 						this.arrayBuffer = arrayBuffer;
 						this.markDirty();
 						this.updateRestartButtonState(); // Enable restart button after recording
-						// Show transcription and custom prompt sections with progressive disclosure
-						if (this.transcriptionSection) {
-							this.showSection(this.transcriptionSection);
-						}
-						if (this.customPromptSection) {
-							this.showSection(this.customPromptSection);
-						}
 						this.announce('Transcription complete');
 					} catch (error) {
 						new Notice(error);
@@ -1468,7 +1406,6 @@ class CustomCommandModal extends Modal {
 			}
 
 			this.setButtonLoading(this.processButton, true);
-			new Notice('Processing with custom prompt...');
 			this.announce('Processing with custom prompt...');
 			try {
 				const result = await this.ai.generateCustomResponse(
@@ -1480,10 +1417,6 @@ class CustomCommandModal extends Modal {
 				this.insertButton.disabled = false; // Enable insert button
 				this.markDirty();
 				this.updateRestartButtonState();
-				// Show result section with progressive disclosure
-				if (this.resultSection) {
-					this.showSection(this.resultSection);
-				}
 				new Notice('Processing completed! Preview the result and click "Insert to Note" when ready.');
 				this.announce('Processing complete');
 			} catch (error) {
@@ -1575,19 +1508,6 @@ class CustomCommandModal extends Modal {
 		this.recordingButton.focus();
 	}
 
-	close(): void {
-		// Check for unsaved changes before allowing close
-		if (this.isDirty()) {
-			const confirmClose = confirm('You have unsaved changes. Are you sure you want to close?');
-			if (!confirmClose) {
-				return; // Prevent modal from closing
-			}
-		}
-
-		// If confirmed or no dirty state, proceed with closing
-		super.close();
-	}
-
 	onClose() {
 		const { contentEl } = this;
 		contentEl.empty();
@@ -1614,6 +1534,7 @@ class SmartMemoModal extends Modal {
 	private restartButton: HTMLButtonElement;
 	private saveButton: HTMLButtonElement;
 	private saveVoiceCheckbox: HTMLInputElement;
+	private statusEl: HTMLElement;
 	private audioRecorder: AudioRecorder | null = null;
 	private settings: NoteBuilderPluginSettings;
 	private formattedField: HTMLTextAreaElement;
@@ -1637,12 +1558,6 @@ class SmartMemoModal extends Modal {
 
 	// Accessibility
 	private liveRegion: HTMLElement | null = null;
-
-	// Progressive disclosure section elements
-	private formattedSection: HTMLElement | null = null;
-
-	// Footer loading spinner
-	private footerLoadingSpinner: HTMLElement | null = null;
 
 	constructor(app: App, settings: NoteBuilderPluginSettings, ai: AI) {
 		super(app);
@@ -1715,26 +1630,12 @@ class SmartMemoModal extends Modal {
 
 	// Loading state methods
 	private setButtonLoading(button: HTMLButtonElement, loading: boolean): void {
-		// Check if this is the mic button (has button-mic class)
-		const isMicButton = button.classList.contains('button-mic');
-
 		if (loading) {
 			button.classList.add('button-loading');
 			button.disabled = true;
-
-			// For non-mic buttons (footer buttons), show the footer spinner
-			if (!isMicButton && this.footerLoadingSpinner) {
-				this.footerLoadingSpinner.classList.add('active');
-			}
-			// Mic button uses CSS ::before and ::after pseudo-elements for loading animation
 		} else {
 			button.classList.remove('button-loading');
 			button.disabled = false;
-
-			// Hide footer spinner for non-mic buttons
-			if (!isMicButton && this.footerLoadingSpinner) {
-				this.footerLoadingSpinner.classList.remove('active');
-			}
 		}
 	}
 
@@ -1763,27 +1664,6 @@ class SmartMemoModal extends Modal {
 			setTimeout(() => {
 				if (this.liveRegion) this.liveRegion.textContent = '';
 			}, 1000);
-		}
-	}
-
-	// Progressive disclosure methods
-	private showSection(sectionEl: HTMLElement): void {
-		if (sectionEl && !sectionEl.classList.contains('active')) {
-			sectionEl.classList.add('active');
-		}
-	}
-
-	private hideSection(sectionEl: HTMLElement): void {
-		if (sectionEl && sectionEl.classList.contains('active')) {
-			sectionEl.classList.remove('active');
-		}
-	}
-
-	private toggleSectionVisibility(sectionEl: HTMLElement, show: boolean): void {
-		if (show) {
-			this.showSection(sectionEl);
-		} else {
-			this.hideSection(sectionEl);
 		}
 	}
 
@@ -1920,6 +1800,8 @@ class SmartMemoModal extends Modal {
 		const container = wrapper.createEl('div', { cls: 'recording-container' });
 
 		// Status display
+		this.statusEl = wrapper.createEl('div', { cls: 'smart-memo-status' });
+
 		// Wire up restart button
 		restartButton.onclick = () => {
 			// Reset timer
@@ -1942,6 +1824,8 @@ class SmartMemoModal extends Modal {
 				this.recordingButton.ariaLabel = 'Start recording';
 			}
 
+			// Reset status
+			this.statusEl.textContent = '';
 
 			// Mark as dirty since user cleared content
 			this.markDirty();
@@ -1985,11 +1869,9 @@ class SmartMemoModal extends Modal {
 		const editorsWrapper = container.createEl('div', { cls: 'recording-editors' });
 
 		// Formatted note field
-		// Formatted note field with progressive disclosure
-		this.formattedSection = editorsWrapper.createEl('div', { cls: 'progressive-section' });
-		const formattedLabelSection = this.formattedSection.createEl('div', { cls: 'smart-memo-section' });
-		formattedLabelSection.createEl('h4', { text: 'Formatted Note', cls: 'smart-memo-label' });
-		this.formattedField = formattedLabelSection.createEl(
+		const formattedSection = editorsWrapper.createEl('div', { cls: 'smart-memo-section' });
+		formattedSection.createEl('h4', { text: 'Formatted Note', cls: 'smart-memo-label' });
+		this.formattedField = formattedSection.createEl(
 			'textarea',
 			{
 				cls: 'recording-textfield smart-memo-field',
@@ -2005,9 +1887,6 @@ class SmartMemoModal extends Modal {
 		const controlsPanel = wrapper.createEl('div', { cls: 'recording-controls' });
 		const options = controlsPanel.createEl('div', { cls: 'recording-options' });
 		const actions = controlsPanel.createEl('div', { cls: 'recording-actions' });
-
-		// Add footer loading spinner (hidden by default, shown before buttons)
-		this.footerLoadingSpinner = actions.createEl('div', { cls: 'footer-loading-spinner' });
 
 		const saveVoiceLabel = options.createEl('label', { cls: 'recording-merge-label', attr: { 'for': 'save-voice-checkbox-smart' } });
 		saveVoiceLabel.createEl('span', { text: 'Save voice memo to file and attach link' });
@@ -2031,6 +1910,7 @@ class SmartMemoModal extends Modal {
 			if (this.recordingButton.classList.contains('start')) {
 				this.recordingButton.classList.replace('start', 'stop');
 				this.recordingButton.ariaLabel = 'Stop recording';
+				this.statusEl.textContent = 'Recording...';
 
 				// Start timer
 				this.startTimer();
@@ -2039,7 +1919,6 @@ class SmartMemoModal extends Modal {
 				this.updateRestartButtonState();
 
 				// Announce recording started
-				new Notice('Recording started...');
 				this.announce('Recording started');
 
 				this.audioRecorder = new AudioRecorder();
@@ -2053,21 +1932,19 @@ class SmartMemoModal extends Modal {
 					// Announce recording stopped
 					this.announce('Recording stopped, processing...');
 
+					this.statusEl.textContent = 'Stopping recording...';
 					const { audioFile, arrayBuffer } = await this.audioRecorder.stopRecording();
 					this.recordingFile = audioFile;
 					this.arrayBuffer = arrayBuffer;
-
-					// Show loading state on mic button during processing
-					this.setButtonLoading(this.recordingButton, true);
 
 					// Auto-process the recording
 					await this.processAudio(audioFile);
 				} catch (error) {
 					new Notice(`Recording error: ${error.message}`);
 					console.error('Recording error:', error);
+					this.statusEl.textContent = 'Recording failed';
 					this.announce('Error: Recording failed');
 				} finally {
-					this.setButtonLoading(this.recordingButton, false);
 					this.recordingButton.classList.replace('stop', 'start');
 					this.recordingButton.ariaLabel = 'Start recording';
 					this.updateRestartButtonState();
@@ -2181,7 +2058,7 @@ class SmartMemoModal extends Modal {
 
 		try {
 			// Step 1: Transcribe
-			new Notice('Transcribing audio...');
+			this.statusEl.textContent = 'Transcribing audio...';
 			this.announce('Transcribing audio...');
 
 			try {
@@ -2202,21 +2079,22 @@ class SmartMemoModal extends Modal {
 					new Notice(`Transcription failed: ${errorMessage}`);
 				}
 
+				this.statusEl.textContent = 'Transcription failed';
 				this.announce('Error: Transcription failed');
 				return;
 			}
 
 			if (!transcription || transcription.trim().length === 0) {
 				new Notice('Transcription returned empty. The audio may be silent or unclear.');
+				this.statusEl.textContent = 'No transcription generated';
 				this.announce('Error: No transcription generated');
 				return;
 			}
 
-			new Notice('Transcription complete!');
 			this.announce('Transcription complete');
 
 			// Step 2: Format with Smart Memo
-			new Notice('Formatting note...');
+			this.statusEl.textContent = 'Formatting note...';
 			this.announce('Formatting note...');
 
 			try {
@@ -2228,19 +2106,16 @@ class SmartMemoModal extends Modal {
 
 				if (!formattedNote || formattedNote.trim().length === 0) {
 					new Notice('Smart Memo generation returned empty result.');
+					this.statusEl.textContent = 'Formatting failed';
 					this.announce('Error: Formatting failed');
 					return;
 				}
 
 				this.formattedField.value = formattedNote;
 				this.saveButton.disabled = false;
+				this.statusEl.textContent = 'Ready to save!';
 				this.markDirty();
 				this.updateRestartButtonState();
-				// Show formatted section with progressive disclosure
-				if (this.formattedSection) {
-					this.showSection(this.formattedSection);
-				}
-				new Notice('Formatted note ready!');
 				this.announce('Processing complete');
 
 			} catch (formatError) {
@@ -2259,6 +2134,7 @@ class SmartMemoModal extends Modal {
 					new Notice(`Formatting failed: ${errorMessage}`);
 				}
 
+				this.statusEl.textContent = 'Formatting failed';
 				this.announce('Error: Formatting failed');
 				return;
 			}
@@ -2267,21 +2143,9 @@ class SmartMemoModal extends Modal {
 			// Catch-all for any unexpected errors
 			const errorMessage = error.message || String(error);
 			new Notice(`Unexpected error: ${errorMessage}`);
+			this.statusEl.textContent = 'Processing failed';
 			this.announce('Error: Processing failed');
 		}
-	}
-
-	close(): void {
-		// Check for unsaved changes before allowing close
-		if (this.isDirty()) {
-			const confirmClose = confirm('You have unsaved changes. Are you sure you want to close?');
-			if (!confirmClose) {
-				return; // Prevent modal from closing
-			}
-		}
-
-		// If confirmed or no dirty state, proceed with closing
-		super.close();
 	}
 
 	onClose() {
