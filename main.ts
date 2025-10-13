@@ -116,6 +116,8 @@ class MemoModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 
+		new Setting(contentEl).setName('Create Memo').setHeading();
+
 		// Modal-wide drop overlay
 		const dropOverlay = contentEl.createEl('div', { cls: 'modal-drop-overlay' });
 		dropOverlay.appendChild(
@@ -156,7 +158,6 @@ class MemoModal extends Modal {
 		const wrapper = contentEl.createEl('div', { cls: 'recording-wrapper' });
 		const titleSection = wrapper.createEl('div', { cls: 'recording-title-section' });
 
-		titleSection.createEl('h3', { text: 'Note Builder', cls: 'recording-title' });
 		titleSection.createEl('p', { text: 'Record your notes, transcribe, or upload audio for transcription', cls: 'recording-subtitle' });
 
 		const container = wrapper.createEl('div', { cls: 'recording-container' });
@@ -474,6 +475,8 @@ class CustomCommandModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 
+		new Setting(contentEl).setName('Custom Command').setHeading();
+
 		// Modal-wide drop overlay
 		const dropOverlay = contentEl.createEl('div', { cls: 'modal-drop-overlay' });
 		dropOverlay.appendChild(
@@ -514,7 +517,6 @@ class CustomCommandModal extends Modal {
 		const wrapper = contentEl.createEl('div', { cls: 'recording-wrapper' });
 		const titleSection = wrapper.createEl('div', { cls: 'recording-title-section' });
 
-		titleSection.createEl('h3', { text: 'Custom command', cls: 'recording-title' });
 		titleSection.createEl('p', { text: 'Record or upload audio, then use a custom prompt to process the transcription', cls: 'recording-subtitle' });
 
 		const container = wrapper.createEl('div', { cls: 'recording-container' });
