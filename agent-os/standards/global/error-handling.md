@@ -121,8 +121,8 @@ function processFile(file: TFile | null): void {
   }
 
   // Validate file size
-  if (file.stat.size > 10_000_000) {
-    new Notice('File too large (max 10MB)');
+  if (file.stat.size > 100_000_000) {
+    new Notice('File too large (max 100MB)');
     return;
   }
 

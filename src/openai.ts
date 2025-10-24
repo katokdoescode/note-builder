@@ -7,6 +7,7 @@ export interface ModelSettings {
 	tasksModel: string,
 	reflexModel: string,
 	customResponseModel: string,
+	smartMemoModel: string,
 }
 
 export const defaultModelSettings = {
@@ -16,6 +17,7 @@ export const defaultModelSettings = {
 	tasksModel: 'gpt-4o',
 	reflexModel: 'gpt-4o',
 	customResponseModel: 'gpt-4o',
+	smartMemoModel: 'gpt-4o-mini',
 } as const as ModelSettings;
 
 export default class AI {
@@ -132,6 +134,23 @@ export default class AI {
 
 		const response = await this.openai.responses.create({
 			model: this.modelSettings.customResponseModel,
+			input
+		});
+
+		return response.output_text;
+	}
+
+	async generateSmartMemo(text: string, prompt: string, format: string) {
+		const otherInformation = `
+		Today is: "${getDate()}", so if you need the date, use it, and calculate new dates.
+		Output should be in "${this.language}" language.`;
+
+		const input = prompt.replace('{{ transcription }}', text)
+			.replace('{{ format }}', format)
+			.replace('{{ otherInformation }}', otherInformation);
+
+		const response = await this.openai.responses.create({
+			model: this.modelSettings.smartMemoModel,
 			input
 		});
 

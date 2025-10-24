@@ -38,10 +38,10 @@ If your plugin does not need CSS, delete this file.
 	}
 }
 .recording-container {
-	display: grid;
-	grid-template-columns: max-content 1fr;
+	display: flex;
+	flex-direction: column;
 	gap: .5rem;
-	align-items: start;
+	width: 100%;
 }
 
 .recording-controls {
@@ -70,6 +70,7 @@ If your plugin does not need CSS, delete this file.
 	display: flex;
 	flex-direction: column;
 	gap: 0.5rem;
+	width: 100%;
 
 	pre {
 		margin: 0;
@@ -86,14 +87,6 @@ If your plugin does not need CSS, delete this file.
 	animation: none;
 }
 
-.outer-glowing {
-	animation: glowing 2s ease infinite;
-}
-
-.inner-glowing {
-	animation: inset-glowing 2s ease infinite;
-}
-
 .recording-merge-label {
 	display: flex;
 	gap: .5rem;
@@ -102,20 +95,6 @@ If your plugin does not need CSS, delete this file.
 
 	input[type="checkbox"] {
 		margin: 0;
-	}
-}
-
-.glowing-wrapper {
-	box-shadow: 0 0 0px 0px transparent;
-	overflow: visible;
-	border-radius: var(--button-radius);
-
-	&:has(.start) {
-		animation: none;
-	}
-
-	&:has(.stop) {
-		animation: glowing 2s ease infinite;
 	}
 }
 
@@ -157,32 +136,248 @@ If your plugin does not need CSS, delete this file.
 	aspect-ratio: 1 / 1;
 }
 
-@keyframes glowing {
-  0% {
-    box-shadow: 0 0 0px 0px transparent;
-  }
 
-  50% {
-    box-shadow: 0 0 6px 4px rgba(244, 30, 166, 0.7);
-  }
+/* ========================================
+   NEW UNIFIED BUTTON & COMPONENT STYLES
+   ======================================== */
 
-	100% {
-    box-shadow: 0 0 0px 0px transparent;
-  }
+/* Horizontal Button Group Layout */
+.button-group-horizontal {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 12px;
+	margin-bottom: 1rem;
 }
 
-@keyframes inset-glowing {
-  0% {
-    box-shadow: inset 0 0 0px 0px transparent;
-  }
+/* Button Sizes - Touchscreen Friendly */
+.button-restart {
+	width: 45px;
+	height: 45px;
+	min-width: 45px;
+	min-height: 45px;
+	aspect-ratio: 1 / 1;
+	background-position: center;
+	background-repeat: no-repeat;
+	background-size: 65%;
+	cursor: pointer;
+	border-radius: var(--button-radius);
+	transition: opacity 0.2s ease, transform 0.1s ease;
+}
 
-  50% {
-    box-shadow: inset 0 0 6px 4px rgba(244, 30, 166, 0.7);
-  }
+.button-restart:hover {
+	opacity: 0.8;
+}
 
+.button-restart:active {
+	transform: scale(0.95);
+}
+
+.button-mic {
+	width: 60px;
+	height: 60px;
+	min-width: 60px;
+	min-height: 60px;
+	aspect-ratio: 1 / 1;
+	background-position: center;
+	background-repeat: no-repeat;
+	background-size: 70%;
+	cursor: pointer;
+	border-radius: var(--button-radius);
+	transition: opacity 0.2s ease, transform 0.1s ease;
+	position: relative;
+}
+
+.button-mic:hover {
+	opacity: 0.8;
+}
+
+.button-mic:active {
+	transform: scale(0.95);
+}
+
+.button-upload {
+	width: 45px;
+	height: 45px;
+	min-width: 45px;
+	min-height: 45px;
+	aspect-ratio: 1 / 1;
+	background-position: center;
+	background-repeat: no-repeat;
+	background-size: 65%;
+	cursor: pointer;
+	border-radius: var(--button-radius);
+	transition: opacity 0.2s ease, transform 0.1s ease;
+}
+
+.button-upload:hover {
+	opacity: 0.8;
+}
+
+.button-upload:active {
+	transform: scale(0.95);
+}
+
+/* Recording Timer */
+.recording-timer {
+	font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace;
+	font-size: 14px;
+	text-align: center;
+	margin-top: 0.5rem;
+	font-weight: 500;
+	min-width: 60px;
+	transition: color 0.2s ease;
+}
+
+.recording-timer.idle {
+	color: var(--text-faint);
+}
+
+.recording-timer.recording {
+	color: var(--text-error);
+}
+
+.recording-timer.stopped {
+	color: var(--text-normal);
+}
+
+/* Progressive Disclosure Sections */
+.progressive-section {
+	max-height: 0;
+	overflow: hidden;
+	opacity: 0;
+	transition: max-height 0.3s ease-out, opacity 0.3s ease-out, margin 0.3s ease-out;
+}
+
+.progressive-section.active {
+	max-height: 1000px; /* Large enough for content */
+	opacity: 1;
+	margin-bottom: 1rem;
+}
+
+/* Button Loading States */
+
+/* Footer loader - shown before all action buttons */
+.footer-loading-spinner {
+	display: none;
+	width: 20px;
+	height: 20px;
+	border: 3px solid var(--background-modifier-border);
+	border-top-color: var(--interactive-accent);
+	border-radius: 50%;
+	animation: spin 0.6s linear infinite;
+	flex-shrink: 0;
+	margin-right: auto; /* Pushes spinner to left despite flex-end */
+	align-self: center; /* Centers vertically */
+}
+
+.footer-loading-spinner.active {
+	display: block;
+}
+
+/* Mic button internal loader with sonar animation around the button */
+.button-mic.button-loading {
+	pointer-events: none;
+	position: relative;
+}
+
+/* Small internal spinner in the center of the mic button */
+.button-mic.button-loading::before {
+	content: '';
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	width: 20px;
+	height: 20px;
+	margin: -10px 0 0 -10px;
+	border: 2px solid transparent;
+	border-top-color: var(--interactive-accent);
+	border-radius: 50%;
+	animation: spin 0.8s linear infinite;
+	z-index: 2;
+}
+
+/* Multi-layered sonar animation pulsing around the mic button using box-shadow */
+.button-mic.button-loading::after {
+	content: '';
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	border-radius: 50%;
+	animation: sonar-pulse 2s ease-out infinite;
+	z-index: 0;
+	pointer-events: none;
+}
+
+@keyframes spin {
+	0% {
+		transform: rotate(0deg);
+	}
 	100% {
-    box-shadow: inset 0 0 0px 0px transparent;
-  }
+		transform: rotate(360deg);
+	}
+}
+
+@keyframes sonar-pulse {
+	0% {
+		box-shadow:
+			0 0 0 0px var(--interactive-accent),
+			0 0 0 0px var(--interactive-accent),
+			0 0 0 0px var(--interactive-accent);
+		opacity: 0;
+	}
+	10% {
+		box-shadow:
+			0 0 0 2px var(--interactive-accent),
+			0 0 0 0px var(--interactive-accent),
+			0 0 0 0px var(--interactive-accent);
+		opacity: 0.8;
+	}
+	25% {
+		box-shadow:
+			0 0 0 8px var(--interactive-accent),
+			0 0 0 2px var(--interactive-accent),
+			0 0 0 0px var(--interactive-accent);
+		opacity: 0.6;
+	}
+	40% {
+		box-shadow:
+			0 0 0 14px var(--interactive-accent),
+			0 0 0 8px var(--interactive-accent),
+			0 0 0 2px var(--interactive-accent);
+		opacity: 0.4;
+	}
+	60% {
+		box-shadow:
+			0 0 0 20px var(--interactive-accent),
+			0 0 0 14px var(--interactive-accent),
+			0 0 0 8px var(--interactive-accent);
+		opacity: 0.2;
+	}
+	80% {
+		box-shadow:
+			0 0 0 26px var(--interactive-accent),
+			0 0 0 20px var(--interactive-accent),
+			0 0 0 14px var(--interactive-accent);
+		opacity: 0.05;
+	}
+	100% {
+		box-shadow:
+			0 0 0 32px var(--interactive-accent),
+			0 0 0 26px var(--interactive-accent),
+			0 0 0 20px var(--interactive-accent);
+		opacity: 0;
+	}
+}
+
+/* Button Group Timer Container */
+.button-timer-container {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 0;
 }
 
 .recording-upload-droparea {
@@ -236,6 +431,7 @@ If your plugin does not need CSS, delete this file.
 	flex-direction: column;
 	gap: 0.5rem;
 	margin-bottom: 1rem;
+	width: 100%;
 }
 
 .custom-command-label {
@@ -266,6 +462,113 @@ If your plugin does not need CSS, delete this file.
 
 .recording-button.process:active {
 	background-color: var(--interactive-accent-active);
+}
+
+/* Smart Memo Modal Styles */
+.smart-memo-section {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+	margin-bottom: 1rem;
+	width: 100%;
+}
+
+.smart-memo-label {
+	font-size: 0.9rem;
+	font-weight: 600;
+	color: var(--text-muted);
+	margin: 0;
+}
+
+.smart-memo-field {
+	min-height: 200px;
+}
+
+.smart-memo-status {
+	padding: 0.5rem;
+	margin: 0.5rem 0;
+	background: var(--background-secondary);
+	border-radius: var(--radius-s);
+	text-align: center;
+	font-weight: 500;
+	color: var(--text-muted);
+	min-height: 1.5rem;
+}
+
+/* ========================================
+   ACCESSIBILITY STYLES
+   ======================================== */
+
+/* Screen reader only content */
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border-width: 0;
+}
+
+/* Focus visible for keyboard navigation */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 2px;
+}
+
+/* ========================================
+   MOBILE RESPONSIVE STYLES
+   ======================================== */
+
+@media (max-width: 480px) {
+	/* Make modals nearly full screen on mobile */
+	.modal {
+		height: 95vh !important;
+		max-height: 95vh !important;
+	}
+
+	/* Ensure buttons remain touch-friendly */
+	.button-restart {
+		min-width: 48px;
+		min-height: 48px;
+		width: 48px;
+		height: 48px;
+	}
+
+	.button-mic {
+		min-width: 60px;
+		min-height: 60px;
+	}
+
+	.button-upload {
+		min-width: 48px;
+		min-height: 48px;
+		width: 48px;
+		height: 48px;
+	}
+
+	/* Adjust button group spacing for smaller screens */
+	.button-group-horizontal {
+		gap: 8px;
+	}
+
+	/* Adjust recording controls for mobile */
+	.recording-controls {
+		gap: 0.75rem;
+	}
+
+	.recording-actions {
+		flex-direction: column;
+		align-items: stretch;
+	}
+
+	.recording-actions button {
+		width: 100%;
+	}
 }
 
 /* Settings */
