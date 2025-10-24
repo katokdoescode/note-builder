@@ -116,7 +116,7 @@ class MemoModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 
-		new Setting(contentEl).setName('Create Memo').setHeading();
+		new Setting(contentEl).setName('create memo').setHeading();
 
 		// Modal-wide drop overlay
 		const dropOverlay = contentEl.createEl('div', { cls: 'modal-drop-overlay' });
@@ -475,7 +475,7 @@ class CustomCommandModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 
-		new Setting(contentEl).setName('Custom Command').setHeading();
+		new Setting(contentEl).setName('custom command').setHeading();
 
 		// Modal-wide drop overlay
 		const dropOverlay = contentEl.createEl('div', { cls: 'modal-drop-overlay' });
@@ -782,7 +782,7 @@ class NoteBuilderSettingTab extends PluginSettingTab {
 		}
 
 		new Setting(containerEl)
-			.setName('Audio memo')
+			.setName('audio memo')
 			.setHeading();
 
 		new Setting(containerEl)
