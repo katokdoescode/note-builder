@@ -378,6 +378,8 @@ class MemoModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 
+		new Setting(contentEl).setName('create memo').setHeading();
+
 		// Modal-wide drop overlay
 		const dropOverlay = contentEl.createEl('div', { cls: 'modal-drop-overlay' });
 		dropOverlay.appendChild(
@@ -429,7 +431,6 @@ class MemoModal extends Modal {
 
 		const titleSection = wrapper.createEl('div', { cls: 'recording-title-section' });
 
-		titleSection.createEl('h3', { text: 'Note Builder', cls: 'recording-title' });
 		titleSection.createEl('p', { text: 'Record your notes, transcribe, or upload audio for transcription', cls: 'recording-subtitle' });
 
 		// Create new horizontal button group BEFORE container - at wrapper level
@@ -1173,6 +1174,8 @@ class CustomCommandModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 
+		new Setting(contentEl).setName('custom command').setHeading();
+
 		// Modal-wide drop overlay
 		const dropOverlay = contentEl.createEl('div', { cls: 'modal-drop-overlay' });
 		dropOverlay.appendChild(
@@ -1224,7 +1227,6 @@ class CustomCommandModal extends Modal {
 
 		const titleSection = wrapper.createEl('div', { cls: 'recording-title-section' });
 
-		titleSection.createEl('h3', { text: 'Custom command', cls: 'recording-title' });
 		titleSection.createEl('p', { text: 'Record or upload audio, then use a custom prompt to process the transcription', cls: 'recording-subtitle' });
 
 		// Create new horizontal button group BEFORE container - at wrapper level
@@ -2365,7 +2367,7 @@ class NoteBuilderSettingTab extends PluginSettingTab {
 		}
 
 		new Setting(containerEl)
-			.setName('Audio memo')
+			.setName('audio memo')
 			.setHeading();
 
 		new Setting(containerEl)
