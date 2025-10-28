@@ -5,6 +5,7 @@ import { AudioRecorder } from 'src/utils/recording';
 import { DEFAULT_SUMMARY_PROMPT, DEFAULT_SUMMARY_FORMAT } from './src/prompts/summary';
 import { DEFAULT_TASKS_FORMAT, DEFAULT_TASKS_PROMPT } from 'src/prompts/tasks';
 import { DEFAULT_REFLEX_PROMPT, DEFAULT_REFLEX_FORMAT } from 'src/prompts/reflex';
+import { DEFAULT_SMART_MEMO_PROMPT, DEFAULT_SMART_MEMO_FORMAT } from 'src/prompts/smartmemo';
 
 interface NoteBuilderPluginSettings {
 	openaiApiKey: string;
@@ -17,6 +18,8 @@ interface NoteBuilderPluginSettings {
 	tasksOutputFormat: string;
 	reflexCustomPrompt: string;
 	reflexOutputFormat: string;
+	smartMemoCustomPrompt: string;
+	smartMemoOutputFormat: string;
 	modelSettings: ModelSettings;
 
 }
@@ -32,6 +35,8 @@ const DEFAULT_SETTINGS: NoteBuilderPluginSettings = {
 	tasksOutputFormat: DEFAULT_TASKS_FORMAT,
 	reflexCustomPrompt: DEFAULT_REFLEX_PROMPT,
 	reflexOutputFormat: DEFAULT_REFLEX_FORMAT,
+	smartMemoCustomPrompt: DEFAULT_SMART_MEMO_PROMPT,
+	smartMemoOutputFormat: DEFAULT_SMART_MEMO_FORMAT,
 	modelSettings: defaultModelSettings
 }
 
@@ -64,6 +69,15 @@ export default class NoteBuilder extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: 'smart-memo',
+			name: 'Smart memo',
+			callback: () => {
+				const smartMemoModal = new SmartMemoModal(this.app, this.settings, this.ai);
+				smartMemoModal.open();
+			},
+		});
+
 		this.addSettingTab(new NoteBuilderSettingTab(this.app, this));
 	}
 
@@ -84,6 +98,7 @@ export default class NoteBuilder extends Plugin {
 
 class MemoModal extends Modal {
 	private recordingButton: HTMLButtonElement;
+	private restartButton: HTMLButtonElement;
 	private saveButton: HTMLButtonElement;
 	private summaryButton: HTMLButtonElement;
 	private tasksButton: HTMLButtonElement;
@@ -106,10 +121,257 @@ class MemoModal extends Modal {
 	private uploadedArrayBuffer: ArrayBuffer | null = null;
 	private uploadedFileNameEl: HTMLElement | null = null;
 
+	// Timer state
+	private timerEl: HTMLElement | null = null;
+	private recordingStartTime: number | null = null;
+	private recordingTimer: number | null = null;
+	private recordingDuration: number = 0;
+
+	// Dirty state tracking
+	private isDirtyState: boolean = false;
+
+	// Accessibility
+	private liveRegion: HTMLElement | null = null;
+
+	// Progressive disclosure section elements
+	private transcriptionSection: HTMLElement | null = null;
+	private summarySection: HTMLElement | null = null;
+	private tasksSection: HTMLElement | null = null;
+	private reflexSection: HTMLElement | null = null;
+
+	// Footer loading spinner
+	private footerLoadingSpinner: HTMLElement | null = null;
+
 	constructor(app: App, settings: NoteBuilderPluginSettings, ai: AI) {
 		super(app);
 		this.settings = settings;
 		this.ai = ai;
+	}
+
+	// Timer methods
+	private formatTime(milliseconds: number): string {
+		const totalSeconds = Math.floor(milliseconds / 1000);
+		const hours = Math.floor(totalSeconds / 3600);
+		const minutes = Math.floor((totalSeconds % 3600) / 60);
+		const seconds = totalSeconds % 60;
+
+		if (hours > 0) {
+			// HH:MM:SS format for recordings over 1 hour
+			return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+		} else {
+			// MM:SS format for recordings under 1 hour
+			return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+		}
+	}
+
+	private updateTimerDisplay(): void {
+		if (!this.timerEl || this.recordingStartTime === null) return;
+
+		const elapsed = Date.now() - this.recordingStartTime;
+		this.recordingDuration = elapsed;
+		this.timerEl.textContent = this.formatTime(elapsed);
+	}
+
+	private startTimer(): void {
+		this.recordingStartTime = Date.now();
+		this.recordingDuration = 0;
+
+		if (this.timerEl) {
+			this.timerEl.classList.remove('idle', 'stopped');
+			this.timerEl.classList.add('recording');
+		}
+
+		// Update timer every 100ms for smooth display
+		this.recordingTimer = window.setInterval(() => {
+			this.updateTimerDisplay();
+		}, 100);
+	}
+
+	private stopTimer(): void {
+		if (this.recordingTimer !== null) {
+			window.clearInterval(this.recordingTimer);
+			this.recordingTimer = null;
+		}
+
+		if (this.timerEl) {
+			this.timerEl.classList.remove('recording');
+			this.timerEl.classList.add('stopped');
+		}
+	}
+
+	private resetTimer(): void {
+		if (this.recordingTimer !== null) {
+			window.clearInterval(this.recordingTimer);
+			this.recordingTimer = null;
+		}
+
+		this.recordingStartTime = null;
+		this.recordingDuration = 0;
+
+		if (this.timerEl) {
+			this.timerEl.textContent = '00:00';
+			this.timerEl.classList.remove('recording', 'stopped');
+			this.timerEl.classList.add('idle');
+		}
+	}
+
+	// Loading state methods
+	private setButtonLoading(button: HTMLButtonElement, loading: boolean): void {
+		// Check if this is the mic button (has button-mic class)
+		const isMicButton = button.classList.contains('button-mic');
+
+		if (loading) {
+			button.classList.add('button-loading');
+			button.disabled = true;
+
+			// For non-mic buttons (footer buttons), show the footer spinner
+			if (!isMicButton && this.footerLoadingSpinner) {
+				this.footerLoadingSpinner.classList.add('active');
+			}
+			// Mic button uses CSS ::before and ::after pseudo-elements for loading animation
+		} else {
+			button.classList.remove('button-loading');
+			button.disabled = false;
+
+			// Hide footer spinner for non-mic buttons
+			if (!isMicButton && this.footerLoadingSpinner) {
+				this.footerLoadingSpinner.classList.remove('active');
+			}
+		}
+	}
+
+	// Dirty state management methods
+	private isDirty(): boolean {
+		// Check if any text fields have content
+		const hasTranscription = this.textField && this.textField.value.trim().length > 0;
+		const hasSummary = this.summaryField && this.summaryField.value.trim().length > 0;
+		const hasTasks = this.tasksField && this.tasksField.value.trim().length > 0;
+		const hasReflex = this.reflexField && this.reflexField.value.trim().length > 0;
+
+		// Check if we have uploaded/recorded files
+		const hasFile = this.recordingFile !== null || this.uploadedFile !== null;
+
+		// Check if checkboxes have been changed from defaults
+		const mergeChanged = this.mergeToggle && this.mergeToggle.checked;
+		const saveVoiceChanged = this.saveVoiceCheckbox && this.saveVoiceCheckbox.checked;
+
+		return hasTranscription || hasSummary || hasTasks || hasReflex || hasFile || mergeChanged || saveVoiceChanged || this.isDirtyState;
+	}
+
+	private markDirty(): void {
+		this.isDirtyState = true;
+	}
+
+	private resetDirtyState(): void {
+		this.isDirtyState = false;
+	}
+
+	private addDirtyStateListeners(): void {
+		// Add input listeners to text fields
+		if (this.textField) {
+			this.textField.addEventListener('input', () => this.markDirty());
+		}
+	}
+
+	// Progressive disclosure methods
+	private showSection(sectionEl: HTMLElement): void {
+		if (sectionEl && !sectionEl.classList.contains('active')) {
+			sectionEl.classList.add('active');
+		}
+	}
+
+	private hideSection(sectionEl: HTMLElement): void {
+		if (sectionEl && sectionEl.classList.contains('active')) {
+			sectionEl.classList.remove('active');
+		}
+	}
+
+	private toggleSectionVisibility(sectionEl: HTMLElement, show: boolean): void {
+		if (show) {
+			this.showSection(sectionEl);
+		} else {
+			this.hideSection(sectionEl);
+		}
+	}
+
+	// Accessibility helper methods
+	private announce(message: string): void {
+		if (this.liveRegion) {
+			this.liveRegion.textContent = message;
+			// Clear after 1 second to allow re-announcing the same message
+			setTimeout(() => {
+				if (this.liveRegion) this.liveRegion.textContent = '';
+			}, 1000);
+		}
+	}
+
+	// Button group creation methods
+	private createRestartButton(): HTMLButtonElement {
+		const restartButton = document.createElement('button');
+		restartButton.classList.add('button-restart');
+		restartButton.setAttribute('aria-label', 'Restart - Clear recording and reset');
+		restartButton.setAttribute('title', 'Restart');
+		restartButton.style.backgroundImage = 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\'%3E%3Cpath fill=\'currentColor\' d=\'M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46A7.93 7.93 0 0 0 20 12c0-4.42-3.58-8-8-8m0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74A7.93 7.93 0 0 0 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4z\'/%3E%3C/svg%3E")';
+		restartButton.disabled = true; // Start disabled - nothing to reset initially
+		return restartButton;
+	}
+
+	private hasContentToReset(): boolean {
+		const hasTranscription = this.textField && this.textField.value.trim().length > 0;
+		const hasSummary = this.summaryField && this.summaryField.value.trim().length > 0;
+		const hasTasks = this.tasksField && this.tasksField.value.trim().length > 0;
+		const hasReflex = this.reflexField && this.reflexField.value.trim().length > 0;
+		const hasFile = this.recordingFile !== null || this.uploadedFile !== null;
+		const isRecording = this.recordingButton && this.recordingButton.classList.contains('stop');
+		const hasRecordedTime = this.recordingDuration > 0;
+
+		return hasTranscription || hasSummary || hasTasks || hasReflex || hasFile || isRecording || hasRecordedTime;
+	}
+
+	private updateRestartButtonState(): void {
+		if (!this.restartButton) return;
+		const hasContent = this.hasContentToReset();
+		this.restartButton.disabled = !hasContent;
+	}
+
+	private createHorizontalButtonGroup(wrapper: HTMLElement): { restartButton: HTMLButtonElement, micButton: HTMLButtonElement, uploadButton: HTMLButtonElement, timerEl: HTMLElement } {
+		// Create button group container
+		const buttonGroup = wrapper.createEl('div', { cls: 'button-group-horizontal' });
+
+		// Create restart button (left)
+		const restartButton = this.createRestartButton();
+		buttonGroup.appendChild(restartButton);
+
+		// Create mic button container with timer (center)
+		const micContainer = buttonGroup.createEl('div', { cls: 'button-timer-container' });
+
+		const micButton = micContainer.createEl('button', {
+			cls: 'button-mic recording-button start',
+			attr: {
+				'aria-label': 'Start recording',
+				'title': 'Start recording'
+			}
+		});
+		micButton.style.backgroundImage = 'var(--mic-ai-line)';
+
+		// Create timer below mic button
+		const timerEl = micContainer.createEl('div', {
+			cls: 'recording-timer idle',
+			text: '00:00'
+		});
+		this.timerEl = timerEl;
+
+		// Create upload button (right)
+		const uploadButton = buttonGroup.createEl('button', {
+			cls: 'button-upload recording-button upload-button',
+			attr: {
+				'aria-label': 'Upload audio file',
+				'title': 'Upload audio file'
+			}
+		});
+		uploadButton.style.backgroundImage = 'var(--upload-2-line)';
+
+		return { restartButton, micButton, uploadButton, timerEl };
 	}
 
 	onOpen() {
@@ -156,59 +418,103 @@ class MemoModal extends Modal {
 		};
 
 		const wrapper = contentEl.createEl('div', { cls: 'recording-wrapper' });
+
+		// ARIA live region for announcements
+		const liveRegion = wrapper.createEl('div', {
+			cls: 'sr-only',
+			attr: {
+				'aria-live': 'polite',
+				'aria-atomic': 'true'
+			}
+		});
+		this.liveRegion = liveRegion;
+
 		const titleSection = wrapper.createEl('div', { cls: 'recording-title-section' });
 
 		titleSection.createEl('p', { text: 'Record your notes, transcribe, or upload audio for transcription', cls: 'recording-subtitle' });
 
+		// Create new horizontal button group BEFORE container - at wrapper level
+		const { restartButton, micButton, uploadButton, timerEl } = this.createHorizontalButtonGroup(wrapper);
+		this.recordingButton = micButton;
+		this.restartButton = restartButton;
+
+		// Hidden file input for upload button
+		const uploadInput = wrapper.createEl('input', { type: 'file', attr: { accept: '.mp3,.wav,.m4a,audio/*' }, cls: 'recording-upload-input' });
+		uploadInput.style.display = 'none';
+
 		const container = wrapper.createEl('div', { cls: 'recording-container' });
 
-		const buttonSection = container.createEl('div', { cls: 'recording-button-section col' });
-		const glowingWrapper = buttonSection.createEl('div', { cls: 'glowing-wrapper' });
+		// Wire up restart button
+		restartButton.onclick = () => {
+			// Reset timer
+			this.resetTimer();
 
-		this.recordingButton = glowingWrapper.createEl(
-			'button',
-			{
-				cls: 'recording-button start',
-				attr: { 'aria-label': 'Start recording' }
+			// Clear recording state
+			this.recordingFile = null;
+			this.arrayBuffer = null;
+			this.uploadedFile = null;
+			this.uploadedArrayBuffer = null;
+
+			// Clear all text fields
+			if (this.textField) this.textField.value = '';
+			if (this.summaryField) this.summaryField.value = '';
+			if (this.tasksField) this.tasksField.value = '';
+			if (this.reflexField) this.reflexField.value = '';
+
+			// Reset to start state if recording
+			if (this.recordingButton.classList.contains('stop')) {
+				this.audioRecorder?.stopRecording();
+				this.audioRecorder = null;
+				this.recordingButton.classList.replace('stop', 'start');
+				this.recordingButton.ariaLabel = 'Start recording';
 			}
-		);
 
-		const uploadButton = buttonSection.createEl('button', {
-			cls: 'recording-button upload-button',
-			attr: { 'aria-label': 'Upload audio file' }
-		});
+			// Mark as dirty since user cleared content
+			this.markDirty();
 
-		// --- Upload UI ---
-		const uploadSection = wrapper.createEl('div', { cls: 'recording-upload-section' });
-		const uploadInput = uploadSection.createEl('input', { type: 'file', attr: { accept: '.mp3,.wav,.m4a,audio/*' }, cls: 'recording-upload-input' });
-		this.uploadedFileNameEl = uploadSection.createEl('span', { cls: 'recording-upload-filename' });
+			// Update restart button state (should be disabled after reset)
+			this.updateRestartButtonState();
+
+			// Announce reset
+			this.announce('Recording cleared and reset');
+		};
 
 		const handleFile = async (file: File) => {
 			const validTypes = ['audio/mp3', 'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/m4a', 'audio/x-m4a'];
 			const maxSize = 100 * 1024 * 1024; // 100MB
 			if (!validTypes.includes(file.type) && !['mp3', 'wav', 'm4a'].some(ext => file.name.toLowerCase().endsWith(ext))) {
 				new Notice('Unsupported audio format. Please upload mp3, wav, or m4a.');
+				this.announce('Error: Unsupported audio format');
 				return;
 			}
 			if (file.size > maxSize) {
 				new Notice('File is too large. Maximum size is 100MB.');
+				this.announce('Error: File too large');
 				return;
 			}
 			this.uploadedFile = file;
 			this.uploadedArrayBuffer = await file.arrayBuffer();
-			if (this.uploadedFileNameEl) this.uploadedFileNameEl.textContent = `Selected: ${file.name}`;
 			// Auto-transcribe on upload
 			try {
-				this.textField.classList.add('inner-glowing');
+				this.setButtonLoading(uploadButton, true);
+				this.announce('Processing uploaded file');
 				const result = await this.ai.transcribe(file);
 				this.textField.value = result;
 				this.recordingFile = file;
 				this.arrayBuffer = this.uploadedArrayBuffer;
+				this.markDirty();
+				this.updateRestartButtonState(); // Enable restart button after transcription
+				// Show transcription section with progressive disclosure
+				if (this.transcriptionSection) {
+					this.showSection(this.transcriptionSection);
+				}
+				this.announce('Transcription complete');
 			} catch (error) {
 				new Notice(error);
 				console.error('Transcription error:', error);
+				this.announce('Error: ' + error.message);
 			} finally {
-				this.textField.classList.remove('inner-glowing');
+				this.setButtonLoading(uploadButton, false);
 			}
 		};
 		uploadButton.onclick = () => uploadInput.click();
@@ -220,7 +526,10 @@ class MemoModal extends Modal {
 		};
 
 		const editorsWrapper = container.createEl('div', { cls: 'recording-editors' });
-		this.textField = editorsWrapper.createEl(
+
+		// Transcription field with progressive disclosure
+		this.transcriptionSection = editorsWrapper.createEl('div', { cls: 'progressive-section' });
+		this.textField = this.transcriptionSection.createEl(
 			'textarea',
 			{
 				cls: 'recording-textfield',
@@ -228,9 +537,17 @@ class MemoModal extends Modal {
 			}
 		);
 
+		// Add input listener to update restart button state
+		this.textField.addEventListener('input', () => {
+			this.updateRestartButtonState();
+		});
+
 		const controlsPanel = wrapper.createEl('div', { cls: 'recording-controls' });
 		const options = controlsPanel.createEl('div', { cls: 'recording-options' });
 		const actions = controlsPanel.createEl('div', { cls: 'recording-actions' });
+
+		// Add footer loading spinner (hidden by default, shown before buttons)
+		this.footerLoadingSpinner = actions.createEl('div', { cls: 'footer-loading-spinner' });
 
 		this.selectedText = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor.getSelection();
 
@@ -281,36 +598,68 @@ class MemoModal extends Modal {
 			if (this.recordingButton.classList.contains('start')) {
 				this.recordingButton.classList.replace('start', 'stop');
 				this.recordingButton.ariaLabel = 'Stop recording';
+
+				// Start timer
+				this.startTimer();
+
+				// Enable restart button when recording starts
+				this.updateRestartButtonState();
+
+				// Announce recording started
+				new Notice('Recording started...');
+				this.announce('Recording started');
+
 				this.audioRecorder = new AudioRecorder();
 				await this.audioRecorder.init();
 				this.audioRecorder.startRecording();
 			} else if (this.audioRecorder) {
 				try {
+					// Stop timer
+					this.stopTimer();
+
+					// Announce recording stopped
+					new Notice('Recording stopped, transcribing...');
+					this.announce('Recording stopped, processing...');
+
 					const { audioFile, arrayBuffer } = await this.audioRecorder.stopRecording();
 					try {
-						this.textField.classList.add('inner-glowing');
+						// Use new loading state instead of inner-glowing
+						this.setButtonLoading(this.recordingButton, true);
 						const result = await this.ai.transcribe(audioFile);
 						this.textField.value = result;
 						this.recordingFile = audioFile;
 						this.arrayBuffer = arrayBuffer;
+						this.markDirty();
+						this.updateRestartButtonState(); // Enable restart button after recording
+						// Show transcription section with progressive disclosure
+						if (this.transcriptionSection) {
+							this.showSection(this.transcriptionSection);
+						}
+						new Notice('Transcription complete!');
+						this.announce('Transcription complete');
 					} catch (error) {
 						new Notice(error);
 						console.error('Transcription error:', error);
+						this.announce('Error: ' + error.message);
 					}
 				} catch (error) {
 					new Notice(`Recording error: ${error.message}`);
 					console.error('Recording error:', error);
+					this.announce('Error: Recording failed');
 				} finally {
-					this.textField.classList.remove('inner-glowing');
+					this.setButtonLoading(this.recordingButton, false);
 					this.recordingButton.classList.replace('stop', 'start');
 					this.recordingButton.ariaLabel = 'Start recording';
+					this.updateRestartButtonState();
 				}
 			}
 		};
 
 		this.summaryButton.onclick = async () => {
 			if (!this.summaryField) {
-				const pre = editorsWrapper.createEl('pre', { cls: 'recording-summary-pre' });
+				// Create progressive section wrapper
+				this.summarySection = editorsWrapper.createEl('div', { cls: 'progressive-section' });
+				const pre = this.summarySection.createEl('pre', { cls: 'recording-summary-pre' });
 				this.summaryField = pre.createEl(
 					'textarea',
 					{
@@ -318,53 +667,102 @@ class MemoModal extends Modal {
 						attr: { 'aria-label': 'Summary' }
 					}
 				);
+				// Add input listener to update restart button state
+				this.summaryField.addEventListener('input', () => {
+					this.updateRestartButtonState();
+				});
 			}
 
-			this.summaryField.classList.add('inner-glowing');
+			this.setButtonLoading(this.summaryButton, true);
+			new Notice('Generating summary...');
+			this.announce('Generating summary...');
 			try {
 				const summary = await this.ai.generateSummary(this.textField.value, this.settings.summaryCustomPrompt, this.settings.summaryOutputFormat);
 				this.summaryField.value = summary;
+				this.markDirty();
+				this.updateRestartButtonState();
+				// Show summary section with progressive disclosure
+				if (this.summarySection) {
+					this.showSection(this.summarySection);
+				}
+				new Notice('Summary generated!');
+				this.announce('Summary generated');
 			} catch (error) {
 				new Notice(error);
 				console.error('Summary error:', error);
+				this.announce('Error: Summary generation failed');
 			} finally {
-				this.summaryField.classList.remove('inner-glowing');
+				this.setButtonLoading(this.summaryButton, false);
 			}
 		}
 
 		this.tasksButton.onclick = async () => {
 			if (!this.tasksField) {
-				const pre = editorsWrapper.createEl('pre', { cls: 'recording-tasks-pre' });
+				// Create progressive section wrapper
+				this.tasksSection = editorsWrapper.createEl('div', { cls: 'progressive-section' });
+				const pre = this.tasksSection.createEl('pre', { cls: 'recording-tasks-pre' });
 				this.tasksField = pre.createEl('textarea', { cls: 'recording-tasks-textfield', attr: { 'aria-label': 'Tasks' } });
+				// Add input listener to update restart button state
+				this.tasksField.addEventListener('input', () => {
+					this.updateRestartButtonState();
+				});
 			}
 
-			this.tasksField.classList.add('inner-glowing');
+			this.setButtonLoading(this.tasksButton, true);
+			new Notice('Generating tasks...');
+			this.announce('Generating tasks...');
 			try {
 				const tasks = await this.ai.generateTasks(this.textField.value, this.settings.tasksCustomPrompt, this.settings.tasksOutputFormat);
 				this.tasksField.value = tasks;
+				this.markDirty();
+				this.updateRestartButtonState();
+				// Show tasks section with progressive disclosure
+				if (this.tasksSection) {
+					this.showSection(this.tasksSection);
+				}
+				new Notice('Tasks generated!');
+				this.announce('Tasks generated');
 			} catch (error) {
 				new Notice(error);
 				console.error('Tasks error:', error);
+				this.announce('Error: Tasks generation failed');
 			} finally {
-				this.tasksField.classList.remove('inner-glowing');
+				this.setButtonLoading(this.tasksButton, false);
 			}
 		}
 
 		this.reflexButton.onclick = async () => {
 			if (!this.reflexField) {
-				const pre = editorsWrapper.createEl('pre', { cls: 'recording-reflex-pre' });
+				// Create progressive section wrapper
+				this.reflexSection = editorsWrapper.createEl('div', { cls: 'progressive-section' });
+				const pre = this.reflexSection.createEl('pre', { cls: 'recording-reflex-pre' });
 				this.reflexField = pre.createEl('textarea', { cls: 'recording-reflex-textfield', attr: { 'aria-label': 'Reflex' } });
+				// Add input listener to update restart button state
+				this.reflexField.addEventListener('input', () => {
+					this.updateRestartButtonState();
+				});
 			}
 
-			this.reflexField.classList.add('inner-glowing');
+			this.setButtonLoading(this.reflexButton, true);
+			new Notice('Generating reflex...');
+			this.announce('Generating reflex...');
 			try {
 				const reflex = await this.ai.generateReflex(this.textField.value, this.settings.reflexCustomPrompt, this.settings.reflexOutputFormat);
 				this.reflexField.value = reflex;
+				this.markDirty();
+				this.updateRestartButtonState();
+				// Show reflex section with progressive disclosure
+				if (this.reflexSection) {
+					this.showSection(this.reflexSection);
+				}
+				new Notice('Reflex generated!');
+				this.announce('Reflex generated');
 			} catch (error) {
 				new Notice(error);
 				console.error('Reflex error:', error);
+				this.announce('Error: Reflex generation failed');
 			} finally {
-				this.reflexField.classList.remove('inner-glowing');
+				this.setButtonLoading(this.reflexButton, false);
 			}
 		}
 
@@ -405,15 +803,17 @@ class MemoModal extends Modal {
 					// Insert summary with file link at the top if applicable
 					if (summaryText) {
 						if (this.mergeToggle.checked && oldMemo) {
-							this.saveButton.classList.add('outer-glowing');
+							this.setButtonLoading(this.saveButton, true);
+							this.announce('Merging memos...');
 							try {
 								const mergedText = await this.ai.mergeMemo(oldMemo, summaryText);
 								editor.replaceSelection(mergedText + `\n`);
 							} catch (error) {
 								new Notice(`Merge error: ${error.message}`);
 								console.error('Merge error:', error);
+								this.announce('Error: Merge failed');
 							} finally {
-								this.saveButton.classList.remove('outer-glowing');
+								this.setButtonLoading(this.saveButton, false);
 							}
 						} else {
 							editor.replaceSelection(summaryText + `\n`);
@@ -428,27 +828,105 @@ class MemoModal extends Modal {
 					if (transcriptionText) editor.replaceSelection(transcriptionText + `\n`);
 				}
 				if (transcriptionText) new Notice('Transcription saved to the current note.');
+				this.announce('Note saved');
 				this.close();
 			} else {
 				new Notice('No active note to save the transcription.');
+				this.announce('Error: No active note');
 			}
 		}
+
+		// Keyboard navigation
+		contentEl.addEventListener('keydown', (e: KeyboardEvent) => {
+			// Escape key closes modal with dirty check
+			if (e.key === 'Escape') {
+				if (this.isDirty()) {
+					const confirmClose = confirm('You have unsaved changes. Are you sure you want to close?');
+					if (confirmClose) {
+						this.close();
+					}
+				} else {
+					this.close();
+				}
+				e.preventDefault();
+				return;
+			}
+
+			// Spacebar toggles recording (only when not typing in a textarea)
+			const activeElement = document.activeElement;
+			if (e.key === ' ' && activeElement?.tagName !== 'TEXTAREA' && activeElement?.tagName !== 'INPUT') {
+				this.recordingButton.click();
+				e.preventDefault();
+			}
+		});
+
+		// Focus trap
+		const focusableElements = contentEl.querySelectorAll<HTMLElement>(
+			'button:not([disabled]), input:not([disabled]), textarea:not([disabled])'
+		);
+		const firstFocusable = focusableElements[0];
+		const lastFocusable = focusableElements[focusableElements.length - 1];
+
+		contentEl.addEventListener('keydown', (e: KeyboardEvent) => {
+			if (e.key === 'Tab') {
+				if (e.shiftKey) {
+					// Shift+Tab
+					if (document.activeElement === firstFocusable) {
+						lastFocusable.focus();
+						e.preventDefault();
+					}
+				} else {
+					// Tab
+					if (document.activeElement === lastFocusable) {
+						firstFocusable.focus();
+						e.preventDefault();
+					}
+				}
+			}
+		});
+
+		// Set initial focus to mic button
+		this.recordingButton.focus();
+	}
+
+	close(): void {
+		// Check for unsaved changes before allowing close
+		if (this.isDirty()) {
+			const confirmClose = confirm('You have unsaved changes. Are you sure you want to close?');
+			if (!confirmClose) {
+				return; // Prevent modal from closing
+			}
+		}
+
+		// If confirmed or no dirty state, proceed with closing
+		super.close();
 	}
 
 	onClose() {
 		const { contentEl } = this;
 		contentEl.empty();
+
+		// Clean up timer
+		if (this.recordingTimer !== null) {
+			window.clearInterval(this.recordingTimer);
+			this.recordingTimer = null;
+		}
+
 		this.audioRecorder?.stopRecording();
 		this.audioRecorder = null;
 		this.uploadedFile = null;
 		this.uploadedArrayBuffer = null;
 		if (this.uploadedFileNameEl) this.uploadedFileNameEl.textContent = '';
 		if (this.saveVoiceCheckbox) this.saveVoiceCheckbox.checked = false;
+
+		// Reset dirty state
+		this.resetDirtyState();
 	}
 }
 
 class CustomCommandModal extends Modal {
 	private recordingButton: HTMLButtonElement;
+	private restartButton: HTMLButtonElement;
 	private processButton: HTMLButtonElement;
 	private insertButton: HTMLButtonElement;
 	private audioRecorder: AudioRecorder | null = null;
@@ -465,10 +943,231 @@ class CustomCommandModal extends Modal {
 	private uploadedArrayBuffer: ArrayBuffer | null = null;
 	private uploadedFileNameEl: HTMLElement | null = null;
 
+	// Timer state
+	private timerEl: HTMLElement | null = null;
+	private recordingStartTime: number | null = null;
+	private recordingTimer: number | null = null;
+	private recordingDuration: number = 0;
+
+	// Dirty state tracking
+	private isDirtyState: boolean = false;
+
+	// Accessibility
+	private liveRegion: HTMLElement | null = null;
+
+	// Progressive disclosure section elements
+	private transcriptionSection: HTMLElement | null = null;
+	private customPromptSection: HTMLElement | null = null;
+	private resultSection: HTMLElement | null = null;
+
+	// Footer loading spinner
+	private footerLoadingSpinner: HTMLElement | null = null;
+
 	constructor(app: App, settings: NoteBuilderPluginSettings, ai: AI) {
 		super(app);
 		this.settings = settings;
 		this.ai = ai;
+	}
+
+	// Timer methods (same as MemoModal)
+	private formatTime(milliseconds: number): string {
+		const totalSeconds = Math.floor(milliseconds / 1000);
+		const hours = Math.floor(totalSeconds / 3600);
+		const minutes = Math.floor((totalSeconds % 3600) / 60);
+		const seconds = totalSeconds % 60;
+
+		if (hours > 0) {
+			return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+		} else {
+			return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+		}
+	}
+
+	private updateTimerDisplay(): void {
+		if (!this.timerEl || this.recordingStartTime === null) return;
+		const elapsed = Date.now() - this.recordingStartTime;
+		this.recordingDuration = elapsed;
+		this.timerEl.textContent = this.formatTime(elapsed);
+	}
+
+	private startTimer(): void {
+		this.recordingStartTime = Date.now();
+		this.recordingDuration = 0;
+
+		if (this.timerEl) {
+			this.timerEl.classList.remove('idle', 'stopped');
+			this.timerEl.classList.add('recording');
+		}
+
+		this.recordingTimer = window.setInterval(() => {
+			this.updateTimerDisplay();
+		}, 100);
+	}
+
+	private stopTimer(): void {
+		if (this.recordingTimer !== null) {
+			window.clearInterval(this.recordingTimer);
+			this.recordingTimer = null;
+		}
+
+		if (this.timerEl) {
+			this.timerEl.classList.remove('recording');
+			this.timerEl.classList.add('stopped');
+		}
+	}
+
+	private resetTimer(): void {
+		if (this.recordingTimer !== null) {
+			window.clearInterval(this.recordingTimer);
+			this.recordingTimer = null;
+		}
+
+		this.recordingStartTime = null;
+		this.recordingDuration = 0;
+
+		if (this.timerEl) {
+			this.timerEl.textContent = '00:00';
+			this.timerEl.classList.remove('recording', 'stopped');
+			this.timerEl.classList.add('idle');
+		}
+	}
+
+	// Loading state methods
+	private setButtonLoading(button: HTMLButtonElement, loading: boolean): void {
+		// Check if this is the mic button (has button-mic class)
+		const isMicButton = button.classList.contains('button-mic');
+
+		if (loading) {
+			button.classList.add('button-loading');
+			button.disabled = true;
+
+			// For non-mic buttons (footer buttons), show the footer spinner
+			if (!isMicButton && this.footerLoadingSpinner) {
+				this.footerLoadingSpinner.classList.add('active');
+			}
+			// Mic button uses CSS ::before and ::after pseudo-elements for loading animation
+		} else {
+			button.classList.remove('button-loading');
+			button.disabled = false;
+
+			// Hide footer spinner for non-mic buttons
+			if (!isMicButton && this.footerLoadingSpinner) {
+				this.footerLoadingSpinner.classList.remove('active');
+			}
+		}
+	}
+
+	// Dirty state management methods
+	private isDirty(): boolean {
+		const hasTranscription = this.transcriptionField && this.transcriptionField.value.trim().length > 0;
+		const hasPrompt = this.customPromptField && this.customPromptField.value.trim().length > 0;
+		const hasResult = this.resultField && this.resultField.value.trim().length > 0;
+		const hasFile = this.recordingFile !== null || this.uploadedFile !== null;
+
+		return hasTranscription || hasPrompt || hasResult || hasFile || this.isDirtyState;
+	}
+
+	private markDirty(): void {
+		this.isDirtyState = true;
+	}
+
+	private resetDirtyState(): void {
+		this.isDirtyState = false;
+	}
+
+	// Accessibility helper methods
+	private announce(message: string): void {
+		if (this.liveRegion) {
+			this.liveRegion.textContent = message;
+			// Clear after 1 second to allow re-announcing the same message
+			setTimeout(() => {
+				if (this.liveRegion) this.liveRegion.textContent = '';
+			}, 1000);
+		}
+	}
+
+	// Progressive disclosure methods
+	private showSection(sectionEl: HTMLElement): void {
+		if (sectionEl && !sectionEl.classList.contains('active')) {
+			sectionEl.classList.add('active');
+		}
+	}
+
+	private hideSection(sectionEl: HTMLElement): void {
+		if (sectionEl && sectionEl.classList.contains('active')) {
+			sectionEl.classList.remove('active');
+		}
+	}
+
+	private toggleSectionVisibility(sectionEl: HTMLElement, show: boolean): void {
+		if (show) {
+			this.showSection(sectionEl);
+		} else {
+			this.hideSection(sectionEl);
+		}
+	}
+
+	// Button group creation methods
+	private createRestartButton(): HTMLButtonElement {
+		const restartButton = document.createElement('button');
+		restartButton.classList.add('button-restart');
+		restartButton.setAttribute('aria-label', 'Restart - Clear recording and reset');
+		restartButton.setAttribute('title', 'Restart');
+		restartButton.style.backgroundImage = 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\'%3E%3Cpath fill=\'currentColor\' d=\'M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46A7.93 7.93 0 0 0 20 12c0-4.42-3.58-8-8-8m0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74A7.93 7.93 0 0 0 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4z\'/%3E%3C/svg%3E")';
+		restartButton.disabled = true; // Start disabled - nothing to reset initially
+		return restartButton;
+	}
+
+	private hasContentToReset(): boolean {
+		const hasTranscription = this.transcriptionField && this.transcriptionField.value.trim().length > 0;
+		const hasPrompt = this.customPromptField && this.customPromptField.value.trim().length > 0;
+		const hasResult = this.resultField && this.resultField.value.trim().length > 0;
+		const hasFile = this.recordingFile !== null || this.uploadedFile !== null;
+		const isRecording = this.recordingButton && this.recordingButton.classList.contains('stop');
+		const hasRecordedTime = this.recordingDuration > 0;
+
+		return hasTranscription || hasPrompt || hasResult || hasFile || isRecording || hasRecordedTime;
+	}
+
+	private updateRestartButtonState(): void {
+		if (!this.restartButton) return;
+		const hasContent = this.hasContentToReset();
+		this.restartButton.disabled = !hasContent;
+	}
+
+	private createHorizontalButtonGroup(wrapper: HTMLElement): { restartButton: HTMLButtonElement, micButton: HTMLButtonElement, uploadButton: HTMLButtonElement, timerEl: HTMLElement } {
+		const buttonGroup = wrapper.createEl('div', { cls: 'button-group-horizontal' });
+
+		const restartButton = this.createRestartButton();
+		buttonGroup.appendChild(restartButton);
+
+		const micContainer = buttonGroup.createEl('div', { cls: 'button-timer-container' });
+
+		const micButton = micContainer.createEl('button', {
+			cls: 'button-mic recording-button start',
+			attr: {
+				'aria-label': 'Start recording',
+				'title': 'Start recording'
+			}
+		});
+		micButton.style.backgroundImage = 'var(--mic-ai-line)';
+
+		const timerEl = micContainer.createEl('div', {
+			cls: 'recording-timer idle',
+			text: '00:00'
+		});
+		this.timerEl = timerEl;
+
+		const uploadButton = buttonGroup.createEl('button', {
+			cls: 'button-upload recording-button upload-button',
+			attr: {
+				'aria-label': 'Upload audio file',
+				'title': 'Upload audio file'
+			}
+		});
+		uploadButton.style.backgroundImage = 'var(--upload-2-line)';
+
+		return { restartButton, micButton, uploadButton, timerEl };
 	}
 
 	onOpen() {
@@ -515,42 +1214,79 @@ class CustomCommandModal extends Modal {
 		};
 
 		const wrapper = contentEl.createEl('div', { cls: 'recording-wrapper' });
+
+		// ARIA live region for announcements
+		const liveRegion = wrapper.createEl('div', {
+			cls: 'sr-only',
+			attr: {
+				'aria-live': 'polite',
+				'aria-atomic': 'true'
+			}
+		});
+		this.liveRegion = liveRegion;
+
 		const titleSection = wrapper.createEl('div', { cls: 'recording-title-section' });
 
 		titleSection.createEl('p', { text: 'Record or upload audio, then use a custom prompt to process the transcription', cls: 'recording-subtitle' });
 
+		// Create new horizontal button group BEFORE container - at wrapper level
+		const { restartButton, micButton, uploadButton, timerEl } = this.createHorizontalButtonGroup(wrapper);
+		this.recordingButton = micButton;
+		this.restartButton = restartButton;
+
+		// Hidden file input for upload button
+		const uploadInput = wrapper.createEl('input', { type: 'file', attr: { accept: '.mp3,.wav,.m4a,audio/*' }, cls: 'recording-upload-input' });
+		uploadInput.style.display = 'none';
+		this.uploadedFileNameEl = wrapper.createEl('span', { cls: 'recording-upload-filename' });
+		if (this.uploadedFileNameEl) this.uploadedFileNameEl.style.display = "none";
+
 		const container = wrapper.createEl('div', { cls: 'recording-container' });
 
-		const buttonSection = container.createEl('div', { cls: 'recording-button-section col' });
-		const glowingWrapper = buttonSection.createEl('div', { cls: 'glowing-wrapper' });
+		// Wire up restart button
+		restartButton.onclick = () => {
+			// Reset timer
+			this.resetTimer();
 
-		this.recordingButton = glowingWrapper.createEl(
-			'button',
-			{
-				cls: 'recording-button start',
-				attr: { 'aria-label': 'Start recording' }
+			// Clear recording state
+			this.recordingFile = null;
+			this.arrayBuffer = null;
+			this.uploadedFile = null;
+			this.uploadedArrayBuffer = null;
+
+			// Clear all text fields
+			if (this.transcriptionField) this.transcriptionField.value = '';
+			if (this.customPromptField) this.customPromptField.value = '';
+			if (this.resultField) this.resultField.value = '';
+
+			// Reset to start state if recording
+			if (this.recordingButton.classList.contains('stop')) {
+				this.audioRecorder?.stopRecording();
+				this.audioRecorder = null;
+				this.recordingButton.classList.replace('stop', 'start');
+				this.recordingButton.ariaLabel = 'Start recording';
 			}
-		);
 
-		const uploadButton = buttonSection.createEl('button', {
-			cls: 'recording-button upload-button',
-			attr: { 'aria-label': 'Upload audio file' }
-		});
+			// Mark as dirty since user cleared content
+			this.markDirty();
 
-		// --- Upload UI ---
-		const uploadSection = wrapper.createEl('div', { cls: 'recording-upload-section' });
-		const uploadInput = uploadSection.createEl('input', { type: 'file', attr: { accept: '.mp3,.wav,.m4a,audio/*' }, cls: 'recording-upload-input' });
-		this.uploadedFileNameEl = uploadSection.createEl('span', { cls: 'recording-upload-filename' });
+			// Update restart button state (should be disabled after reset)
+			this.updateRestartButtonState();
+
+			// Announce reset
+			this.announce('Recording cleared and reset');
+		};
 
 		const handleFile = async (file: File) => {
 			const validTypes = ['audio/mp3', 'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/m4a', 'audio/x-m4a'];
 			const maxSize = 100 * 1024 * 1024; // 100MB
 			if (!validTypes.includes(file.type) && !['mp3', 'wav', 'm4a'].some(ext => file.name.toLowerCase().endsWith(ext))) {
 				new Notice('Unsupported audio format. Please upload mp3, wav, or m4a.');
+				this.announce('Error: Unsupported audio format');
 				return;
 			}
 			if (file.size > maxSize) {
 				new Notice('File is too large. Maximum size is 100MB.');
+				this.announce('Error: File too large');
 				return;
 			}
 			this.uploadedFile = file;
@@ -558,16 +1294,28 @@ class CustomCommandModal extends Modal {
 			if (this.uploadedFileNameEl) this.uploadedFileNameEl.textContent = `Selected: ${file.name}`;
 			// Auto-transcribe on upload
 			try {
-				this.transcriptionField.classList.add('inner-glowing');
+				this.setButtonLoading(uploadButton, true);
+				this.announce('Processing uploaded file');
 				const result = await this.ai.transcribe(file);
 				this.transcriptionField.value = result;
 				this.recordingFile = file;
 				this.arrayBuffer = this.uploadedArrayBuffer;
+				this.markDirty();
+				this.updateRestartButtonState(); // Enable restart button after transcription
+				// Show transcription and custom prompt sections with progressive disclosure
+				if (this.transcriptionSection) {
+					this.showSection(this.transcriptionSection);
+				}
+				if (this.customPromptSection) {
+					this.showSection(this.customPromptSection);
+				}
+				this.announce('Transcription complete');
 			} catch (error) {
 				new Notice(error);
 				console.error('Transcription error:', error);
+				this.announce('Error: ' + error.message);
 			} finally {
-				this.transcriptionField.classList.remove('inner-glowing');
+				this.setButtonLoading(uploadButton, false);
 			}
 		};
 		uploadButton.onclick = () => uploadInput.click();
@@ -580,10 +1328,11 @@ class CustomCommandModal extends Modal {
 
 		const editorsWrapper = container.createEl('div', { cls: 'recording-editors' });
 
-		// Transcription field
-		const transcriptionSection = editorsWrapper.createEl('div', { cls: 'custom-command-section' });
-		transcriptionSection.createEl('h4', { text: 'Transcription', cls: 'custom-command-label' });
-		this.transcriptionField = transcriptionSection.createEl(
+		// Transcription field with progressive disclosure
+		this.transcriptionSection = editorsWrapper.createEl('div', { cls: 'progressive-section' });
+		const transcriptionLabelSection = this.transcriptionSection.createEl('div', { cls: 'custom-command-section' });
+		transcriptionLabelSection.createEl('h4', { text: 'Transcription', cls: 'custom-command-label' });
+		this.transcriptionField = transcriptionLabelSection.createEl(
 			'textarea',
 			{
 				cls: 'recording-textfield',
@@ -591,10 +1340,16 @@ class CustomCommandModal extends Modal {
 			}
 		);
 
-		// Custom prompt field
-		const promptSection = editorsWrapper.createEl('div', { cls: 'custom-command-section' });
-		promptSection.createEl('h4', { text: 'Custom prompt', cls: 'custom-command-label' });
-		this.customPromptField = promptSection.createEl(
+		// Add input listener to update restart button state
+		this.transcriptionField.addEventListener('input', () => {
+			this.updateRestartButtonState();
+		});
+
+		// Custom prompt field with progressive disclosure
+		this.customPromptSection = editorsWrapper.createEl('div', { cls: 'progressive-section' });
+		const promptLabelSection = this.customPromptSection.createEl('div', { cls: 'custom-command-section' });
+		promptLabelSection.createEl('h4', { text: 'Custom prompt', cls: 'custom-command-label' });
+		this.customPromptField = promptLabelSection.createEl(
 			'textarea',
 			{
 				cls: 'recording-textfield custom-prompt-field',
@@ -602,10 +1357,16 @@ class CustomCommandModal extends Modal {
 			}
 		);
 
-		// Result field
-		const resultSection = editorsWrapper.createEl('div', { cls: 'custom-command-section' });
-		resultSection.createEl('h4', { text: 'Result preview', cls: 'custom-command-label' });
-		this.resultField = resultSection.createEl(
+		// Add input listener to update restart button state
+		this.customPromptField.addEventListener('input', () => {
+			this.updateRestartButtonState();
+		});
+
+		// Result field with progressive disclosure
+		this.resultSection = editorsWrapper.createEl('div', { cls: 'progressive-section' });
+		const resultLabelSection = this.resultSection.createEl('div', { cls: 'custom-command-section' });
+		resultLabelSection.createEl('h4', { text: 'Result preview', cls: 'custom-command-label' });
+		this.resultField = resultLabelSection.createEl(
 			'textarea',
 			{
 				cls: 'recording-textfield result-field',
@@ -613,8 +1374,16 @@ class CustomCommandModal extends Modal {
 			}
 		);
 
+		// Add input listener to update restart button state
+		this.resultField.addEventListener('input', () => {
+			this.updateRestartButtonState();
+		});
+
 		const controlsPanel = wrapper.createEl('div', { cls: 'recording-controls' });
 		const actions = controlsPanel.createEl('div', { cls: 'recording-actions' });
+
+		// Add footer loading spinner (hidden by default, shown before buttons)
+		this.footerLoadingSpinner = actions.createEl('div', { cls: 'footer-loading-spinner' });
 
 		this.processButton = actions.createEl('button', {
 			cls: 'recording-button process',
@@ -631,29 +1400,59 @@ class CustomCommandModal extends Modal {
 			if (this.recordingButton.classList.contains('start')) {
 				this.recordingButton.classList.replace('start', 'stop');
 				this.recordingButton.ariaLabel = 'Stop recording';
+
+				// Start timer
+				this.startTimer();
+
+				// Enable restart button when recording starts
+				this.updateRestartButtonState();
+
+				// Announce recording started
+				new Notice('Recording started...');
+				this.announce('Recording started');
+
 				this.audioRecorder = new AudioRecorder();
 				await this.audioRecorder.init();
 				this.audioRecorder.startRecording();
 			} else if (this.audioRecorder) {
 				try {
+					// Stop timer
+					this.stopTimer();
+
+					// Announce recording stopped
+					this.announce('Recording stopped, processing...');
+
 					const { audioFile, arrayBuffer } = await this.audioRecorder.stopRecording();
 					try {
-						this.transcriptionField.classList.add('inner-glowing');
+						this.setButtonLoading(this.recordingButton, true);
 						const result = await this.ai.transcribe(audioFile);
 						this.transcriptionField.value = result;
 						this.recordingFile = audioFile;
 						this.arrayBuffer = arrayBuffer;
+						this.markDirty();
+						this.updateRestartButtonState(); // Enable restart button after recording
+						// Show transcription and custom prompt sections with progressive disclosure
+						if (this.transcriptionSection) {
+							this.showSection(this.transcriptionSection);
+						}
+						if (this.customPromptSection) {
+							this.showSection(this.customPromptSection);
+						}
+						this.announce('Transcription complete');
 					} catch (error) {
 						new Notice(error);
 						console.error('Transcription error:', error);
+						this.announce('Error: ' + error.message);
 					}
 				} catch (error) {
 					new Notice(`Recording error: ${error.message}`);
 					console.error('Recording error:', error);
+					this.announce('Error: Recording failed');
 				} finally {
-					this.transcriptionField.classList.remove('inner-glowing');
+					this.setButtonLoading(this.recordingButton, false);
 					this.recordingButton.classList.replace('stop', 'start');
 					this.recordingButton.ariaLabel = 'Start recording';
+					this.updateRestartButtonState();
 				}
 			}
 		};
@@ -661,15 +1460,18 @@ class CustomCommandModal extends Modal {
 		this.processButton.onclick = async () => {
 			if (!this.transcriptionField.value.trim()) {
 				new Notice('Please record or upload audio first to get transcription.');
+				this.announce('Error: No transcription available');
 				return;
 			}
 			if (!this.customPromptField.value.trim()) {
 				new Notice('Please enter a custom prompt.');
+				this.announce('Error: No prompt entered');
 				return;
 			}
 
-			this.processButton.classList.add('outer-glowing');
-			this.resultField.classList.add('inner-glowing');
+			this.setButtonLoading(this.processButton, true);
+			new Notice('Processing with custom prompt...');
+			this.announce('Processing with custom prompt...');
 			try {
 				const result = await this.ai.generateCustomResponse(
 					this.transcriptionField.value,
@@ -678,25 +1480,34 @@ class CustomCommandModal extends Modal {
 
 				this.resultField.value = result;
 				this.insertButton.disabled = false; // Enable insert button
+				this.markDirty();
+				this.updateRestartButtonState();
+				// Show result section with progressive disclosure
+				if (this.resultSection) {
+					this.showSection(this.resultSection);
+				}
 				new Notice('Processing completed! Preview the result and click "Insert to Note" when ready.');
+				this.announce('Processing complete');
 			} catch (error) {
 				new Notice(`Processing error: ${error.message}`);
 				console.error('Processing error:', error);
+				this.announce('Error: Processing failed');
 			} finally {
-				this.processButton.classList.remove('outer-glowing');
-				this.resultField.classList.remove('inner-glowing');
+				this.setButtonLoading(this.processButton, false);
 			}
 		};
 
 		this.insertButton.onclick = async () => {
 			if (!this.resultField.value.trim()) {
 				new Notice('No result to insert. Please process first.');
+				this.announce('Error: No result to insert');
 				return;
 			}
 
 			const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
 			if (!activeView) {
 				new Notice('No active note to insert the result.');
+				this.announce('Error: No active note');
 				return;
 			}
 
@@ -704,22 +1515,796 @@ class CustomCommandModal extends Modal {
 				const editor = activeView.editor;
 				editor.replaceSelection(this.resultField.value + '\n');
 				new Notice('Custom command result inserted to the current note.');
+				this.announce('Result inserted to note');
 				this.close();
 			} catch (error) {
 				new Notice(`Insert error: ${error.message}`);
 				console.error('Insert error:', error);
+				this.announce('Error: Insert failed');
 			}
 		};
+
+		// Keyboard navigation
+		contentEl.addEventListener('keydown', (e: KeyboardEvent) => {
+			// Escape key closes modal with dirty check
+			if (e.key === 'Escape') {
+				if (this.isDirty()) {
+					const confirmClose = confirm('You have unsaved changes. Are you sure you want to close?');
+					if (confirmClose) {
+						this.close();
+					}
+				} else {
+					this.close();
+				}
+				e.preventDefault();
+				return;
+			}
+
+			// Spacebar toggles recording (only when not typing in a textarea)
+			const activeElement = document.activeElement;
+			if (e.key === ' ' && activeElement?.tagName !== 'TEXTAREA' && activeElement?.tagName !== 'INPUT') {
+				this.recordingButton.click();
+				e.preventDefault();
+			}
+		});
+
+		// Focus trap
+		const focusableElements = contentEl.querySelectorAll<HTMLElement>(
+			'button:not([disabled]), input:not([disabled]), textarea:not([disabled])'
+		);
+		const firstFocusable = focusableElements[0];
+		const lastFocusable = focusableElements[focusableElements.length - 1];
+
+		contentEl.addEventListener('keydown', (e: KeyboardEvent) => {
+			if (e.key === 'Tab') {
+				if (e.shiftKey) {
+					// Shift+Tab
+					if (document.activeElement === firstFocusable) {
+						lastFocusable.focus();
+						e.preventDefault();
+					}
+				} else {
+					// Tab
+					if (document.activeElement === lastFocusable) {
+						firstFocusable.focus();
+						e.preventDefault();
+					}
+				}
+			}
+		});
+
+		// Set initial focus to mic button
+		this.recordingButton.focus();
+	}
+
+	close(): void {
+		// Check for unsaved changes before allowing close
+		if (this.isDirty()) {
+			const confirmClose = confirm('You have unsaved changes. Are you sure you want to close?');
+			if (!confirmClose) {
+				return; // Prevent modal from closing
+			}
+		}
+
+		// If confirmed or no dirty state, proceed with closing
+		super.close();
 	}
 
 	onClose() {
 		const { contentEl } = this;
 		contentEl.empty();
+
+		// Clean up timer
+		if (this.recordingTimer !== null) {
+			window.clearInterval(this.recordingTimer);
+			this.recordingTimer = null;
+		}
+
 		this.audioRecorder?.stopRecording();
 		this.audioRecorder = null;
 		this.uploadedFile = null;
 		this.uploadedArrayBuffer = null;
 		if (this.uploadedFileNameEl) this.uploadedFileNameEl.textContent = '';
+
+		// Reset dirty state
+		this.resetDirtyState();
+	}
+}
+
+class SmartMemoModal extends Modal {
+	private recordingButton: HTMLButtonElement;
+	private restartButton: HTMLButtonElement;
+	private saveButton: HTMLButtonElement;
+	private saveVoiceCheckbox: HTMLInputElement;
+	private audioRecorder: AudioRecorder | null = null;
+	private settings: NoteBuilderPluginSettings;
+	private formattedField: HTMLTextAreaElement;
+	private recordingFile: File | null = null;
+	private arrayBuffer: ArrayBuffer | null = null;
+	private ai: AI;
+
+	// Upload state
+	private uploadedFile: File | null = null;
+	private uploadedArrayBuffer: ArrayBuffer | null = null;
+	private uploadedFileNameEl: HTMLElement | null = null;
+
+	// Timer state
+	private timerEl: HTMLElement | null = null;
+	private recordingStartTime: number | null = null;
+	private recordingTimer: number | null = null;
+	private recordingDuration: number = 0;
+
+	// Dirty state tracking
+	private isDirtyState: boolean = false;
+
+	// Accessibility
+	private liveRegion: HTMLElement | null = null;
+
+	// Progressive disclosure section elements
+	private formattedSection: HTMLElement | null = null;
+
+	// Footer loading spinner
+	private footerLoadingSpinner: HTMLElement | null = null;
+
+	constructor(app: App, settings: NoteBuilderPluginSettings, ai: AI) {
+		super(app);
+		this.settings = settings;
+		this.ai = ai;
+	}
+
+	// Timer methods
+	private formatTime(milliseconds: number): string {
+		const totalSeconds = Math.floor(milliseconds / 1000);
+		const hours = Math.floor(totalSeconds / 3600);
+		const minutes = Math.floor((totalSeconds % 3600) / 60);
+		const seconds = totalSeconds % 60;
+
+		if (hours > 0) {
+			return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+		} else {
+			return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+		}
+	}
+
+	private updateTimerDisplay(): void {
+		if (!this.timerEl || this.recordingStartTime === null) return;
+		const elapsed = Date.now() - this.recordingStartTime;
+		this.recordingDuration = elapsed;
+		this.timerEl.textContent = this.formatTime(elapsed);
+	}
+
+	private startTimer(): void {
+		this.recordingStartTime = Date.now();
+		this.recordingDuration = 0;
+
+		if (this.timerEl) {
+			this.timerEl.classList.remove('idle', 'stopped');
+			this.timerEl.classList.add('recording');
+		}
+
+		this.recordingTimer = window.setInterval(() => {
+			this.updateTimerDisplay();
+		}, 100);
+	}
+
+	private stopTimer(): void {
+		if (this.recordingTimer !== null) {
+			window.clearInterval(this.recordingTimer);
+			this.recordingTimer = null;
+		}
+
+		if (this.timerEl) {
+			this.timerEl.classList.remove('recording');
+			this.timerEl.classList.add('stopped');
+		}
+	}
+
+	private resetTimer(): void {
+		if (this.recordingTimer !== null) {
+			window.clearInterval(this.recordingTimer);
+			this.recordingTimer = null;
+		}
+
+		this.recordingStartTime = null;
+		this.recordingDuration = 0;
+
+		if (this.timerEl) {
+			this.timerEl.textContent = '00:00';
+			this.timerEl.classList.remove('recording', 'stopped');
+			this.timerEl.classList.add('idle');
+		}
+	}
+
+	// Loading state methods
+	private setButtonLoading(button: HTMLButtonElement, loading: boolean): void {
+		// Check if this is the mic button (has button-mic class)
+		const isMicButton = button.classList.contains('button-mic');
+
+		if (loading) {
+			button.classList.add('button-loading');
+			button.disabled = true;
+
+			// For non-mic buttons (footer buttons), show the footer spinner
+			if (!isMicButton && this.footerLoadingSpinner) {
+				this.footerLoadingSpinner.classList.add('active');
+			}
+			// Mic button uses CSS ::before and ::after pseudo-elements for loading animation
+		} else {
+			button.classList.remove('button-loading');
+			button.disabled = false;
+
+			// Hide footer spinner for non-mic buttons
+			if (!isMicButton && this.footerLoadingSpinner) {
+				this.footerLoadingSpinner.classList.remove('active');
+			}
+		}
+	}
+
+	// Dirty state management methods
+	private isDirty(): boolean {
+		const hasFormatted = this.formattedField && this.formattedField.value.trim().length > 0;
+		const hasFile = this.recordingFile !== null || this.uploadedFile !== null;
+		const saveVoiceChanged = this.saveVoiceCheckbox && this.saveVoiceCheckbox.checked;
+
+		return hasFormatted || hasFile || saveVoiceChanged || this.isDirtyState;
+	}
+
+	private markDirty(): void {
+		this.isDirtyState = true;
+	}
+
+	private resetDirtyState(): void {
+		this.isDirtyState = false;
+	}
+
+	// Accessibility helper methods
+	private announce(message: string): void {
+		if (this.liveRegion) {
+			this.liveRegion.textContent = message;
+			// Clear after 1 second to allow re-announcing the same message
+			setTimeout(() => {
+				if (this.liveRegion) this.liveRegion.textContent = '';
+			}, 1000);
+		}
+	}
+
+	// Progressive disclosure methods
+	private showSection(sectionEl: HTMLElement): void {
+		if (sectionEl && !sectionEl.classList.contains('active')) {
+			sectionEl.classList.add('active');
+		}
+	}
+
+	private hideSection(sectionEl: HTMLElement): void {
+		if (sectionEl && sectionEl.classList.contains('active')) {
+			sectionEl.classList.remove('active');
+		}
+	}
+
+	private toggleSectionVisibility(sectionEl: HTMLElement, show: boolean): void {
+		if (show) {
+			this.showSection(sectionEl);
+		} else {
+			this.hideSection(sectionEl);
+		}
+	}
+
+	// Button group creation methods
+	private createRestartButton(): HTMLButtonElement {
+		const restartButton = document.createElement('button');
+		restartButton.classList.add('button-restart');
+		restartButton.setAttribute('aria-label', 'Restart - Clear recording and reset');
+		restartButton.setAttribute('title', 'Restart');
+		restartButton.style.backgroundImage = 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\'%3E%3Cpath fill=\'currentColor\' d=\'M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46A7.93 7.93 0 0 0 20 12c0-4.42-3.58-8-8-8m0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74A7.93 7.93 0 0 0 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4z\'/%3E%3C/svg%3E")';
+		restartButton.disabled = true; // Start disabled - nothing to reset initially
+		return restartButton;
+	}
+
+	private hasContentToReset(): boolean {
+		const hasFormatted = this.formattedField && this.formattedField.value.trim().length > 0;
+		const hasFile = this.recordingFile !== null || this.uploadedFile !== null;
+		const isRecording = this.recordingButton && this.recordingButton.classList.contains('stop');
+		const hasRecordedTime = this.recordingDuration > 0;
+
+		return hasFormatted || hasFile || isRecording || hasRecordedTime;
+	}
+
+	private updateRestartButtonState(): void {
+		if (!this.restartButton) return;
+		const hasContent = this.hasContentToReset();
+		this.restartButton.disabled = !hasContent;
+	}
+
+	private createHorizontalButtonGroup(wrapper: HTMLElement): { restartButton: HTMLButtonElement, micButton: HTMLButtonElement, uploadButton: HTMLButtonElement, timerEl: HTMLElement } {
+		const buttonGroup = wrapper.createEl('div', { cls: 'button-group-horizontal' });
+
+		const restartButton = this.createRestartButton();
+		buttonGroup.appendChild(restartButton);
+
+		const micContainer = buttonGroup.createEl('div', { cls: 'button-timer-container' });
+
+		const micButton = micContainer.createEl('button', {
+			cls: 'button-mic recording-button start',
+			attr: {
+				'aria-label': 'Start recording',
+				'title': 'Start recording'
+			}
+		});
+		micButton.style.backgroundImage = 'var(--mic-ai-line)';
+
+		const timerEl = micContainer.createEl('div', {
+			cls: 'recording-timer idle',
+			text: '00:00'
+		});
+		this.timerEl = timerEl;
+
+		const uploadButton = buttonGroup.createEl('button', {
+			cls: 'button-upload recording-button upload-button',
+			attr: {
+				'aria-label': 'Upload audio file',
+				'title': 'Upload audio file'
+			}
+		});
+		uploadButton.style.backgroundImage = 'var(--upload-2-line)';
+
+		return { restartButton, micButton, uploadButton, timerEl };
+	}
+
+	onOpen() {
+		const { contentEl } = this;
+		contentEl.empty();
+
+		// Modal-wide drop overlay
+		const dropOverlay = contentEl.createEl('div', { cls: 'modal-drop-overlay' });
+		dropOverlay.appendChild(
+			contentEl.createDiv({ cls: 'drop-message', text: 'Drop audio file to upload' })
+		);
+
+		let dragCounter = 0;
+		const showOverlay = () => { dropOverlay.classList.add('active'); };
+		const hideOverlay = () => { dropOverlay.classList.remove('active'); };
+
+		contentEl.ondragenter = (e) => {
+			e.preventDefault();
+			dragCounter++;
+			showOverlay();
+		};
+
+		contentEl.ondragleave = (e) => {
+			dragCounter--;
+			if (dragCounter <= 0) {
+				hideOverlay();
+				dragCounter = 0;
+			}
+		};
+
+		contentEl.ondragover = (e) => {
+			e.preventDefault();
+		};
+
+		dropOverlay.ondrop = (e) => {
+			e.preventDefault();
+			hideOverlay();
+			dragCounter = 0;
+			if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+				handleFile(e.dataTransfer.files[0]);
+			}
+		};
+
+		const wrapper = contentEl.createEl('div', { cls: 'recording-wrapper' });
+
+		// ARIA live region for announcements
+		const liveRegion = wrapper.createEl('div', {
+			cls: 'sr-only',
+			attr: {
+				'aria-live': 'polite',
+				'aria-atomic': 'true'
+			}
+		});
+		this.liveRegion = liveRegion;
+
+		const titleSection = wrapper.createEl('div', { cls: 'recording-title-section' });
+
+		titleSection.createEl('h3', { text: 'Smart Memo', cls: 'recording-title' });
+		titleSection.createEl('p', { text: 'Record audio and automatically create a formatted note', cls: 'recording-subtitle' });
+
+		// Create new horizontal button group BEFORE container - at wrapper level
+		const { restartButton, micButton, uploadButton, timerEl } = this.createHorizontalButtonGroup(wrapper);
+		this.recordingButton = micButton;
+		this.restartButton = restartButton;
+
+		// Hidden file input for upload button
+		const uploadInput = wrapper.createEl('input', { type: 'file', attr: { accept: '.mp3,.wav,.m4a,audio/*' }, cls: 'recording-upload-input' });
+		uploadInput.style.display = 'none';
+		this.uploadedFileNameEl = wrapper.createEl('span', { cls: 'recording-upload-filename' });
+		if (this.uploadedFileNameEl) this.uploadedFileNameEl.style.display = "none";
+
+		const container = wrapper.createEl('div', { cls: 'recording-container' });
+
+		// Status display
+		// Wire up restart button
+		restartButton.onclick = () => {
+			// Reset timer
+			this.resetTimer();
+
+			// Clear recording state
+			this.recordingFile = null;
+			this.arrayBuffer = null;
+			this.uploadedFile = null;
+			this.uploadedArrayBuffer = null;
+
+			// Clear formatted field
+			if (this.formattedField) this.formattedField.value = '';
+
+			// Reset to start state if recording
+			if (this.recordingButton.classList.contains('stop')) {
+				this.audioRecorder?.stopRecording();
+				this.audioRecorder = null;
+				this.recordingButton.classList.replace('stop', 'start');
+				this.recordingButton.ariaLabel = 'Start recording';
+			}
+
+
+			// Mark as dirty since user cleared content
+			this.markDirty();
+
+			// Update restart button state (should be disabled after reset)
+			this.updateRestartButtonState();
+
+			// Announce reset
+			this.announce('Recording cleared and reset');
+		};
+
+		const handleFile = async (file: File) => {
+			const validTypes = ['audio/mp3', 'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/m4a', 'audio/x-m4a'];
+			const maxSize = 100 * 1024 * 1024; // 100MB
+			if (!validTypes.includes(file.type) && !['mp3', 'wav', 'm4a'].some(ext => file.name.toLowerCase().endsWith(ext))) {
+				new Notice('Unsupported audio format. Please upload mp3, wav, or m4a.');
+				this.announce('Error: Unsupported audio format');
+				return;
+			}
+			if (file.size > maxSize) {
+				new Notice('File is too large. Maximum size is 100MB.');
+				this.announce('Error: File too large');
+				return;
+			}
+			this.uploadedFile = file;
+			this.uploadedArrayBuffer = await file.arrayBuffer();
+			if (this.uploadedFileNameEl) this.uploadedFileNameEl.textContent = `Selected: ${file.name}`;
+
+			// Auto-process the file
+			await this.processAudio(file);
+		};
+
+		uploadButton.onclick = () => uploadInput.click();
+		uploadInput.onchange = async (e: Event) => {
+			const files = (e.target as HTMLInputElement).files;
+			if (files && files.length > 0) {
+				handleFile(files[0]);
+			}
+		};
+
+		const editorsWrapper = container.createEl('div', { cls: 'recording-editors' });
+
+		// Formatted note field
+		// Formatted note field with progressive disclosure
+		this.formattedSection = editorsWrapper.createEl('div', { cls: 'progressive-section' });
+		const formattedLabelSection = this.formattedSection.createEl('div', { cls: 'smart-memo-section' });
+		formattedLabelSection.createEl('h4', { text: 'Formatted Note', cls: 'smart-memo-label' });
+		this.formattedField = formattedLabelSection.createEl(
+			'textarea',
+			{
+				cls: 'recording-textfield smart-memo-field',
+				attr: { 'aria-label': 'Formatted Note', 'placeholder': 'Your formatted note will appear here...' }
+			}
+		);
+
+		// Add input listener to update restart button state
+		this.formattedField.addEventListener('input', () => {
+			this.updateRestartButtonState();
+		});
+
+		const controlsPanel = wrapper.createEl('div', { cls: 'recording-controls' });
+		const options = controlsPanel.createEl('div', { cls: 'recording-options' });
+		const actions = controlsPanel.createEl('div', { cls: 'recording-actions' });
+
+		// Add footer loading spinner (hidden by default, shown before buttons)
+		this.footerLoadingSpinner = actions.createEl('div', { cls: 'footer-loading-spinner' });
+
+		const saveVoiceLabel = options.createEl('label', { cls: 'recording-merge-label', attr: { 'for': 'save-voice-checkbox-smart' } });
+		saveVoiceLabel.createEl('span', { text: 'Save voice memo to file and attach link' });
+		this.saveVoiceCheckbox = saveVoiceLabel.createEl('input', {
+			cls: 'save-voice-checkbox',
+			type: 'checkbox',
+			attr: {
+				'id': 'save-voice-checkbox-smart',
+				'aria-label': 'Save voice memo to file and attach link'
+			}
+		});
+		this.saveVoiceCheckbox.checked = true; // Default to true for Smart Memo
+
+		this.saveButton = actions.createEl('button', {
+			cls: 'recording-button save',
+			text: 'Save to Note',
+		});
+		this.saveButton.disabled = true; // Initially disabled
+
+		this.recordingButton.onclick = async () => {
+			if (this.recordingButton.classList.contains('start')) {
+				this.recordingButton.classList.replace('start', 'stop');
+				this.recordingButton.ariaLabel = 'Stop recording';
+
+				// Start timer
+				this.startTimer();
+
+				// Enable restart button when recording starts
+				this.updateRestartButtonState();
+
+				// Announce recording started
+				new Notice('Recording started...');
+				this.announce('Recording started');
+
+				this.audioRecorder = new AudioRecorder();
+				await this.audioRecorder.init();
+				this.audioRecorder.startRecording();
+			} else if (this.audioRecorder) {
+				try {
+					// Stop timer
+					this.stopTimer();
+
+					// Announce recording stopped
+					this.announce('Recording stopped, processing...');
+
+					const { audioFile, arrayBuffer } = await this.audioRecorder.stopRecording();
+					this.recordingFile = audioFile;
+					this.arrayBuffer = arrayBuffer;
+
+					// Show loading state on mic button during processing
+					this.setButtonLoading(this.recordingButton, true);
+
+					// Auto-process the recording
+					await this.processAudio(audioFile);
+				} catch (error) {
+					new Notice(`Recording error: ${error.message}`);
+					console.error('Recording error:', error);
+					this.announce('Error: Recording failed');
+				} finally {
+					this.setButtonLoading(this.recordingButton, false);
+					this.recordingButton.classList.replace('stop', 'start');
+					this.recordingButton.ariaLabel = 'Start recording';
+					this.updateRestartButtonState();
+				}
+			}
+		};
+
+		this.saveButton.onclick = async () => {
+			if (!this.formattedField.value.trim()) {
+				new Notice('No formatted note to save.');
+				this.announce('Error: No content to save');
+				return;
+			}
+
+			const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+			if (!activeView) {
+				new Notice('No active note to save to.');
+				this.announce('Error: No active note');
+				return;
+			}
+
+			try {
+				const editor = activeView.editor;
+				let content = this.formattedField.value + '\n\n';
+
+				// Save voice file if checkbox is checked and we have audio
+				if (this.saveVoiceCheckbox.checked && this.recordingFile && this.arrayBuffer) {
+					try {
+						const file = await saveFile(
+							this.app,
+							this.settings.recordingDirectory,
+							this.arrayBuffer,
+							this.recordingFile.name.split('.').pop() || 'wav',
+							'smart-memo-',
+						);
+						const fileLink = `![](${file.path})\n\n`;
+						content = fileLink + content;
+						new Notice(`Recording saved to ${file.path}!`);
+					} catch (error) {
+						new Notice(`Recording save failed: ${error.message}`);
+						console.error('Recording save failed:', error);
+					}
+				}
+
+				editor.replaceSelection(content);
+				new Notice('Smart memo saved to the current note.');
+				this.announce('Note saved');
+				this.close();
+			} catch (error) {
+				new Notice(`Save error: ${error.message}`);
+				console.error('Save error:', error);
+				this.announce('Error: Save failed');
+			}
+		};
+
+		// Keyboard navigation
+		contentEl.addEventListener('keydown', (e: KeyboardEvent) => {
+			// Escape key closes modal with dirty check
+			if (e.key === 'Escape') {
+				if (this.isDirty()) {
+					const confirmClose = confirm('You have unsaved changes. Are you sure you want to close?');
+					if (confirmClose) {
+						this.close();
+					}
+				} else {
+					this.close();
+				}
+				e.preventDefault();
+				return;
+			}
+
+			// Spacebar toggles recording (only when not typing in a textarea)
+			const activeElement = document.activeElement;
+			if (e.key === ' ' && activeElement?.tagName !== 'TEXTAREA' && activeElement?.tagName !== 'INPUT') {
+				this.recordingButton.click();
+				e.preventDefault();
+			}
+		});
+
+		// Focus trap
+		const focusableElements = contentEl.querySelectorAll<HTMLElement>(
+			'button:not([disabled]), input:not([disabled]), textarea:not([disabled])'
+		);
+		const firstFocusable = focusableElements[0];
+		const lastFocusable = focusableElements[focusableElements.length - 1];
+
+		contentEl.addEventListener('keydown', (e: KeyboardEvent) => {
+			if (e.key === 'Tab') {
+				if (e.shiftKey) {
+					// Shift+Tab
+					if (document.activeElement === firstFocusable) {
+						lastFocusable.focus();
+						e.preventDefault();
+					}
+				} else {
+					// Tab
+					if (document.activeElement === lastFocusable) {
+						firstFocusable.focus();
+						e.preventDefault();
+					}
+				}
+			}
+		});
+
+		// Set initial focus to mic button
+		this.recordingButton.focus();
+	}
+
+	private async processAudio(audioFile: File) {
+		let transcription: string | null = null;
+
+		try {
+			// Step 1: Transcribe
+			new Notice('Transcribing audio...');
+			this.announce('Transcribing audio...');
+
+			try {
+				transcription = await this.ai.transcribe(audioFile);
+			} catch (transcribeError) {
+				const errorMessage = transcribeError.message || String(transcribeError);
+
+				// Check for specific error types
+				if (errorMessage.includes('timeout') || errorMessage.includes('timed out')) {
+					new Notice('Transcription timeout: File may be too large. Try a shorter recording.');
+				} else if (errorMessage.includes('size') || errorMessage.includes('limit')) {
+					new Notice('File size error: Audio file exceeds API limits (max 25MB for Whisper).');
+				} else if (errorMessage.includes('format') || errorMessage.includes('unsupported')) {
+					new Notice(`Unsupported audio format: ${audioFile.type}`);
+				} else if (errorMessage.includes('network') || errorMessage.includes('fetch')) {
+					new Notice('Network error during transcription. Check your connection.');
+				} else {
+					new Notice(`Transcription failed: ${errorMessage}`);
+				}
+
+				this.announce('Error: Transcription failed');
+				return;
+			}
+
+			if (!transcription || transcription.trim().length === 0) {
+				new Notice('Transcription returned empty. The audio may be silent or unclear.');
+				this.announce('Error: No transcription generated');
+				return;
+			}
+
+			new Notice('Transcription complete!');
+			this.announce('Transcription complete');
+
+			// Step 2: Format with Smart Memo
+			new Notice('Formatting note...');
+			this.announce('Formatting note...');
+
+			try {
+				const formattedNote = await this.ai.generateSmartMemo(
+					transcription,
+					this.settings.smartMemoCustomPrompt,
+					this.settings.smartMemoOutputFormat
+				);
+
+				if (!formattedNote || formattedNote.trim().length === 0) {
+					new Notice('Smart Memo generation returned empty result.');
+					this.announce('Error: Formatting failed');
+					return;
+				}
+
+				this.formattedField.value = formattedNote;
+				this.saveButton.disabled = false;
+				this.markDirty();
+				this.updateRestartButtonState();
+				// Show formatted section with progressive disclosure
+				if (this.formattedSection) {
+					this.showSection(this.formattedSection);
+				}
+				new Notice('Formatted note ready!');
+				this.announce('Processing complete');
+
+			} catch (formatError) {
+				const errorMessage = formatError.message || String(formatError);
+
+				// Check for specific error types
+				if (errorMessage.includes('timeout') || errorMessage.includes('timed out')) {
+					new Notice('Formatting timeout: Response generation took too long. Try again.');
+				} else if (errorMessage.includes('token') || errorMessage.includes('length')) {
+					new Notice('Content too large: Transcription exceeds model token limits.');
+				} else if (errorMessage.includes('rate') || errorMessage.includes('quota')) {
+					new Notice('API rate limit reached. Wait a moment and try again.');
+				} else if (errorMessage.includes('network') || errorMessage.includes('fetch')) {
+					new Notice('Network error during formatting. Check your connection.');
+				} else {
+					new Notice(`Formatting failed: ${errorMessage}`);
+				}
+
+				this.announce('Error: Formatting failed');
+				return;
+			}
+
+		} catch (error) {
+			// Catch-all for any unexpected errors
+			const errorMessage = error.message || String(error);
+			new Notice(`Unexpected error: ${errorMessage}`);
+			this.announce('Error: Processing failed');
+		}
+	}
+
+	close(): void {
+		// Check for unsaved changes before allowing close
+		if (this.isDirty()) {
+			const confirmClose = confirm('You have unsaved changes. Are you sure you want to close?');
+			if (!confirmClose) {
+				return; // Prevent modal from closing
+			}
+		}
+
+		// If confirmed or no dirty state, proceed with closing
+		super.close();
+	}
+
+	onClose() {
+		const { contentEl } = this;
+		contentEl.empty();
+
+		// Clean up timer
+		if (this.recordingTimer !== null) {
+			window.clearInterval(this.recordingTimer);
+			this.recordingTimer = null;
+		}
+
+		this.audioRecorder?.stopRecording();
+		this.audioRecorder = null;
+		this.uploadedFile = null;
+		this.uploadedArrayBuffer = null;
+		if (this.uploadedFileNameEl) this.uploadedFileNameEl.textContent = '';
+		if (this.saveVoiceCheckbox) this.saveVoiceCheckbox.checked = true;
+
+		// Reset dirty state
+		this.resetDirtyState();
 	}
 }
 
@@ -901,6 +2486,39 @@ class NoteBuilderSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.modelSettings.customResponseModel)
 				.onChange(async (value) => {
 					this.plugin.settings.modelSettings.customResponseModel = value;
+					await this.plugin.saveSettings();
+				})
+			)
+
+		containerEl.createEl('h3', { text: 'Smart Memo Settings', cls: 'note-builder-settings-title' });
+
+		new Setting(containerEl)
+			.setName('Smart memo custom prompt')
+			.setDesc('Enter a custom prompt for Smart Memo formatting, or leave empty for default')
+			.addTextArea(text => text
+				.setValue(this.plugin.settings.smartMemoCustomPrompt)
+				.onChange(async (value) => {
+					this.plugin.settings.smartMemoCustomPrompt = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Smart memo output format')
+			.addTextArea(text => text
+				.setValue(this.plugin.settings.smartMemoOutputFormat)
+				.onChange(async (value) => {
+					this.plugin.settings.smartMemoOutputFormat = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Smart memo model')
+			.setDesc('Enter a model name, or leave empty to use "gpt-4o-mini" by default')
+			.addText(text => text
+				.setPlaceholder('gpt-4o-mini, etc.')
+				.setValue(this.plugin.settings.modelSettings.smartMemoModel)
+				.onChange(async (value) => {
+					this.plugin.settings.modelSettings.smartMemoModel = value;
 					await this.plugin.saveSettings();
 				})
 			)
