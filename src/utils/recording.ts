@@ -40,7 +40,7 @@ export class AudioRecorder {
 				this.mediaRecorder.stop();
 
 				this.mediaRecorder.onerror = (event: ErrorEvent) => {
-					reject(event.error);
+					reject(new Error(event.error?.message || 'Recording error occurred'));
 				};
 			}
 		});

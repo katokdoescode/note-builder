@@ -40,6 +40,43 @@ const DEFAULT_SETTINGS: NoteBuilderPluginSettings = {
 	modelSettings: defaultModelSettings
 }
 
+class ConfirmModal extends Modal {
+	private resolve: ((value: boolean) => void) | null = null;
+	private promise: Promise<boolean>;
+
+	constructor(app: App, message: string) {
+		super(app);
+		this.promise = new Promise((resolve) => {
+			this.resolve = resolve;
+		});
+
+		this.modalEl.addClass('confirm-modal');
+		const { contentEl } = this;
+		contentEl.empty();
+
+		contentEl.createEl('p', { text: message });
+
+		new Setting(contentEl)
+			.addButton(button => button
+				.setButtonText('Cancel')
+				.onClick(() => {
+					if (this.resolve) this.resolve(false);
+					this.close();
+				}))
+			.addButton(button => button
+				.setButtonText('Confirm')
+				.setCta()
+				.onClick(() => {
+					if (this.resolve) this.resolve(true);
+					this.close();
+				}));
+	}
+
+	async waitForResult(): Promise<boolean> {
+		return this.promise;
+	}
+}
+
 export default class NoteBuilder extends Plugin {
 	settings: NoteBuilderPluginSettings;
 	ai: AI;
@@ -309,9 +346,8 @@ class MemoModal extends Modal {
 	private createRestartButton(): HTMLButtonElement {
 		const restartButton = document.createElement('button');
 		restartButton.classList.add('button-restart');
-		restartButton.setAttribute('aria-label', 'Restart - Clear recording and reset');
+		restartButton.setAttribute('aria-label', 'Restart - clear recording and reset');
 		restartButton.setAttribute('title', 'Restart');
-		restartButton.style.backgroundImage = 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\'%3E%3Cpath fill=\'currentColor\' d=\'M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46A7.93 7.93 0 0 0 20 12c0-4.42-3.58-8-8-8m0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74A7.93 7.93 0 0 0 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4z\'/%3E%3C/svg%3E")';
 		restartButton.disabled = true; // Start disabled - nothing to reset initially
 		return restartButton;
 	}
@@ -352,7 +388,6 @@ class MemoModal extends Modal {
 				'title': 'Start recording'
 			}
 		});
-		micButton.style.backgroundImage = 'var(--mic-ai-line)';
 
 		// Create timer below mic button
 		const timerEl = micContainer.createEl('div', {
@@ -369,7 +404,6 @@ class MemoModal extends Modal {
 				'title': 'Upload audio file'
 			}
 		});
-		uploadButton.style.backgroundImage = 'var(--upload-2-line)';
 
 		return { restartButton, micButton, uploadButton, timerEl };
 	}
@@ -378,7 +412,7 @@ class MemoModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 
-		new Setting(contentEl).setName('create memo').setHeading();
+		new Setting(contentEl).setName('Create memo').setHeading();
 
 		// Modal-wide drop overlay
 		const dropOverlay = contentEl.createEl('div', { cls: 'modal-drop-overlay' });
@@ -440,7 +474,6 @@ class MemoModal extends Modal {
 
 		// Hidden file input for upload button
 		const uploadInput = wrapper.createEl('input', { type: 'file', attr: { accept: '.mp3,.wav,.m4a,audio/*' }, cls: 'recording-upload-input' });
-		uploadInput.style.display = 'none';
 
 		const container = wrapper.createEl('div', { cls: 'recording-container' });
 
@@ -463,7 +496,9 @@ class MemoModal extends Modal {
 
 			// Reset to start state if recording
 			if (this.recordingButton.classList.contains('stop')) {
-				this.audioRecorder?.stopRecording();
+				void this.audioRecorder?.stopRecording().catch((error) => {
+			console.error('Error stopping recording:', error);
+		});
 				this.audioRecorder = null;
 				this.recordingButton.classList.replace('stop', 'start');
 				this.recordingButton.ariaLabel = 'Start recording';
@@ -518,10 +553,10 @@ class MemoModal extends Modal {
 			}
 		};
 		uploadButton.onclick = () => uploadInput.click();
-		uploadInput.onchange = async (e: Event) => {
+		uploadInput.onchange = (e: Event) => {
 			const files = (e.target as HTMLInputElement).files;
 			if (files && files.length > 0) {
-				handleFile(files[0]);
+				void handleFile(files[0]);
 			}
 		};
 
@@ -841,10 +876,13 @@ class MemoModal extends Modal {
 			// Escape key closes modal with dirty check
 			if (e.key === 'Escape') {
 				if (this.isDirty()) {
-					const confirmClose = confirm('You have unsaved changes. Are you sure you want to close?');
-					if (confirmClose) {
-						this.close();
-					}
+					const confirmModal = new ConfirmModal(this.app, 'You have unsaved changes. Are you sure you want to close?');
+					confirmModal.open();
+					void confirmModal.waitForResult().then((confirmClose) => {
+						if (confirmClose) {
+							this.close();
+						}
+					});
 				} else {
 					this.close();
 				}
@@ -889,10 +927,12 @@ class MemoModal extends Modal {
 		this.recordingButton.focus();
 	}
 
-	close(): void {
+	async close(): Promise<void> {
 		// Check for unsaved changes before allowing close
 		if (this.isDirty()) {
-			const confirmClose = confirm('You have unsaved changes. Are you sure you want to close?');
+			const confirmModal = new ConfirmModal(this.app, 'You have unsaved changes. Are you sure you want to close?');
+			confirmModal.open();
+			const confirmClose = await confirmModal.waitForResult();
 			if (!confirmClose) {
 				return; // Prevent modal from closing
 			}
@@ -912,7 +952,9 @@ class MemoModal extends Modal {
 			this.recordingTimer = null;
 		}
 
-		this.audioRecorder?.stopRecording();
+		void this.audioRecorder?.stopRecording().catch((error) => {
+			console.error('Error stopping recording:', error);
+		});
 		this.audioRecorder = null;
 		this.uploadedFile = null;
 		this.uploadedArrayBuffer = null;
@@ -1111,9 +1153,8 @@ class CustomCommandModal extends Modal {
 	private createRestartButton(): HTMLButtonElement {
 		const restartButton = document.createElement('button');
 		restartButton.classList.add('button-restart');
-		restartButton.setAttribute('aria-label', 'Restart - Clear recording and reset');
+		restartButton.setAttribute('aria-label', 'Restart - clear recording and reset');
 		restartButton.setAttribute('title', 'Restart');
-		restartButton.style.backgroundImage = 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\'%3E%3Cpath fill=\'currentColor\' d=\'M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46A7.93 7.93 0 0 0 20 12c0-4.42-3.58-8-8-8m0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74A7.93 7.93 0 0 0 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4z\'/%3E%3C/svg%3E")';
 		restartButton.disabled = true; // Start disabled - nothing to reset initially
 		return restartButton;
 	}
@@ -1150,7 +1191,6 @@ class CustomCommandModal extends Modal {
 				'title': 'Start recording'
 			}
 		});
-		micButton.style.backgroundImage = 'var(--mic-ai-line)';
 
 		const timerEl = micContainer.createEl('div', {
 			cls: 'recording-timer idle',
@@ -1165,7 +1205,6 @@ class CustomCommandModal extends Modal {
 				'title': 'Upload audio file'
 			}
 		});
-		uploadButton.style.backgroundImage = 'var(--upload-2-line)';
 
 		return { restartButton, micButton, uploadButton, timerEl };
 	}
@@ -1174,7 +1213,7 @@ class CustomCommandModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 
-		new Setting(contentEl).setName('custom command').setHeading();
+		new Setting(contentEl).setName('Custom command').setHeading();
 
 		// Modal-wide drop overlay
 		const dropOverlay = contentEl.createEl('div', { cls: 'modal-drop-overlay' });
@@ -1236,9 +1275,8 @@ class CustomCommandModal extends Modal {
 
 		// Hidden file input for upload button
 		const uploadInput = wrapper.createEl('input', { type: 'file', attr: { accept: '.mp3,.wav,.m4a,audio/*' }, cls: 'recording-upload-input' });
-		uploadInput.style.display = 'none';
 		this.uploadedFileNameEl = wrapper.createEl('span', { cls: 'recording-upload-filename' });
-		if (this.uploadedFileNameEl) this.uploadedFileNameEl.style.display = "none";
+		if (this.uploadedFileNameEl) this.uploadedFileNameEl.classList.add('recording-upload-filename-hidden');
 
 		const container = wrapper.createEl('div', { cls: 'recording-container' });
 
@@ -1260,7 +1298,9 @@ class CustomCommandModal extends Modal {
 
 			// Reset to start state if recording
 			if (this.recordingButton.classList.contains('stop')) {
-				this.audioRecorder?.stopRecording();
+				void this.audioRecorder?.stopRecording().catch((error) => {
+			console.error('Error stopping recording:', error);
+		});
 				this.audioRecorder = null;
 				this.recordingButton.classList.replace('stop', 'start');
 				this.recordingButton.ariaLabel = 'Start recording';
@@ -1319,10 +1359,10 @@ class CustomCommandModal extends Modal {
 			}
 		};
 		uploadButton.onclick = () => uploadInput.click();
-		uploadInput.onchange = async (e: Event) => {
+		uploadInput.onchange = (e: Event) => {
 			const files = (e.target as HTMLInputElement).files;
 			if (files && files.length > 0) {
-				handleFile(files[0]);
+				void handleFile(files[0]);
 			}
 		};
 
@@ -1529,10 +1569,13 @@ class CustomCommandModal extends Modal {
 			// Escape key closes modal with dirty check
 			if (e.key === 'Escape') {
 				if (this.isDirty()) {
-					const confirmClose = confirm('You have unsaved changes. Are you sure you want to close?');
-					if (confirmClose) {
-						this.close();
-					}
+					const confirmModal = new ConfirmModal(this.app, 'You have unsaved changes. Are you sure you want to close?');
+					confirmModal.open();
+					void confirmModal.waitForResult().then((confirmClose) => {
+						if (confirmClose) {
+							this.close();
+						}
+					});
 				} else {
 					this.close();
 				}
@@ -1577,10 +1620,12 @@ class CustomCommandModal extends Modal {
 		this.recordingButton.focus();
 	}
 
-	close(): void {
+	async close(): Promise<void> {
 		// Check for unsaved changes before allowing close
 		if (this.isDirty()) {
-			const confirmClose = confirm('You have unsaved changes. Are you sure you want to close?');
+			const confirmModal = new ConfirmModal(this.app, 'You have unsaved changes. Are you sure you want to close?');
+			confirmModal.open();
+			const confirmClose = await confirmModal.waitForResult();
 			if (!confirmClose) {
 				return; // Prevent modal from closing
 			}
@@ -1600,7 +1645,9 @@ class CustomCommandModal extends Modal {
 			this.recordingTimer = null;
 		}
 
-		this.audioRecorder?.stopRecording();
+		void this.audioRecorder?.stopRecording().catch((error) => {
+			console.error('Error stopping recording:', error);
+		});
 		this.audioRecorder = null;
 		this.uploadedFile = null;
 		this.uploadedArrayBuffer = null;
@@ -1793,9 +1840,8 @@ class SmartMemoModal extends Modal {
 	private createRestartButton(): HTMLButtonElement {
 		const restartButton = document.createElement('button');
 		restartButton.classList.add('button-restart');
-		restartButton.setAttribute('aria-label', 'Restart - Clear recording and reset');
+		restartButton.setAttribute('aria-label', 'Restart - clear recording and reset');
 		restartButton.setAttribute('title', 'Restart');
-		restartButton.style.backgroundImage = 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\'%3E%3Cpath fill=\'currentColor\' d=\'M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46A7.93 7.93 0 0 0 20 12c0-4.42-3.58-8-8-8m0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74A7.93 7.93 0 0 0 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4z\'/%3E%3C/svg%3E")';
 		restartButton.disabled = true; // Start disabled - nothing to reset initially
 		return restartButton;
 	}
@@ -1830,7 +1876,6 @@ class SmartMemoModal extends Modal {
 				'title': 'Start recording'
 			}
 		});
-		micButton.style.backgroundImage = 'var(--mic-ai-line)';
 
 		const timerEl = micContainer.createEl('div', {
 			cls: 'recording-timer idle',
@@ -1845,7 +1890,6 @@ class SmartMemoModal extends Modal {
 				'title': 'Upload audio file'
 			}
 		});
-		uploadButton.style.backgroundImage = 'var(--upload-2-line)';
 
 		return { restartButton, micButton, uploadButton, timerEl };
 	}
@@ -1915,9 +1959,8 @@ class SmartMemoModal extends Modal {
 
 		// Hidden file input for upload button
 		const uploadInput = wrapper.createEl('input', { type: 'file', attr: { accept: '.mp3,.wav,.m4a,audio/*' }, cls: 'recording-upload-input' });
-		uploadInput.style.display = 'none';
 		this.uploadedFileNameEl = wrapper.createEl('span', { cls: 'recording-upload-filename' });
-		if (this.uploadedFileNameEl) this.uploadedFileNameEl.style.display = "none";
+		if (this.uploadedFileNameEl) this.uploadedFileNameEl.classList.add('recording-upload-filename-hidden');
 
 		const container = wrapper.createEl('div', { cls: 'recording-container' });
 
@@ -1938,7 +1981,9 @@ class SmartMemoModal extends Modal {
 
 			// Reset to start state if recording
 			if (this.recordingButton.classList.contains('stop')) {
-				this.audioRecorder?.stopRecording();
+				void this.audioRecorder?.stopRecording().catch((error) => {
+			console.error('Error stopping recording:', error);
+		});
 				this.audioRecorder = null;
 				this.recordingButton.classList.replace('stop', 'start');
 				this.recordingButton.ariaLabel = 'Start recording';
@@ -1977,10 +2022,10 @@ class SmartMemoModal extends Modal {
 		};
 
 		uploadButton.onclick = () => uploadInput.click();
-		uploadInput.onchange = async (e: Event) => {
+		uploadInput.onchange = (e: Event) => {
 			const files = (e.target as HTMLInputElement).files;
 			if (files && files.length > 0) {
-				handleFile(files[0]);
+				void handleFile(files[0]);
 			}
 		};
 
@@ -2130,10 +2175,13 @@ class SmartMemoModal extends Modal {
 			// Escape key closes modal with dirty check
 			if (e.key === 'Escape') {
 				if (this.isDirty()) {
-					const confirmClose = confirm('You have unsaved changes. Are you sure you want to close?');
-					if (confirmClose) {
-						this.close();
-					}
+					const confirmModal = new ConfirmModal(this.app, 'You have unsaved changes. Are you sure you want to close?');
+					confirmModal.open();
+					void confirmModal.waitForResult().then((confirmClose) => {
+						if (confirmClose) {
+							this.close();
+						}
+					});
 				} else {
 					this.close();
 				}
@@ -2273,10 +2321,12 @@ class SmartMemoModal extends Modal {
 		}
 	}
 
-	close(): void {
+	async close(): Promise<void> {
 		// Check for unsaved changes before allowing close
 		if (this.isDirty()) {
-			const confirmClose = confirm('You have unsaved changes. Are you sure you want to close?');
+			const confirmModal = new ConfirmModal(this.app, 'You have unsaved changes. Are you sure you want to close?');
+			confirmModal.open();
+			const confirmClose = await confirmModal.waitForResult();
 			if (!confirmClose) {
 				return; // Prevent modal from closing
 			}
@@ -2296,7 +2346,9 @@ class SmartMemoModal extends Modal {
 			this.recordingTimer = null;
 		}
 
-		this.audioRecorder?.stopRecording();
+		void this.audioRecorder?.stopRecording().catch((error) => {
+			console.error('Error stopping recording:', error);
+		});
 		this.audioRecorder = null;
 		this.uploadedFile = null;
 		this.uploadedArrayBuffer = null;
@@ -2322,8 +2374,8 @@ class NoteBuilderSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Open AI API key')
-			.setDesc('Enter your Open AI API key')
+			.setName('OpenAI API key')
+			.setDesc('Enter your OpenAI API key')
 			.addText(text => text
 				.setPlaceholder('Enter your secret')
 				.setValue(this.plugin.settings.openaiApiKey)
@@ -2334,7 +2386,7 @@ class NoteBuilderSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Language')
-			.setDesc('Enter your the language for LLM')
+			.setDesc('Enter the language for LLM')
 			.addText(text => text
 				.setPlaceholder('Language')
 				.setValue(this.plugin.settings.language)
@@ -2367,12 +2419,12 @@ class NoteBuilderSettingTab extends PluginSettingTab {
 		}
 
 		new Setting(containerEl)
-			.setName('audio memo')
+			.setName('Audio memo')
 			.setHeading();
 
 		new Setting(containerEl)
 			.setName('Transcription model')
-			.setDesc('Enter a model name, or leave empty to yse "whisper-1" by default')
+			.setDesc('Enter a model name, or leave empty to use "whisper-1" by default')
 			.addText(text => text
 				.setPlaceholder('whisper-1, etc.')
 				.setValue(this.plugin.settings.modelSettings.transcribeModel)
@@ -2403,7 +2455,7 @@ class NoteBuilderSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Summary model')
-			.setDesc('Enter a model name, or leave empty to yse "gpt-4o" by default')
+			.setDesc('Enter a model name, or leave empty to use "gpt-4o" by default')
 			.addText(text => text
 				.setPlaceholder('gpt-4o, etc.')
 				.setValue(this.plugin.settings.modelSettings.summaryModel)
@@ -2415,7 +2467,7 @@ class NoteBuilderSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Merging model')
-			.setDesc('Enter a model name, or leave empty to yse "gpt-4o" by default')
+			.setDesc('Enter a model name, or leave empty to use "gpt-4o" by default')
 			.addText(text => text
 				.setPlaceholder('gpt-4o, etc.')
 				.setValue(this.plugin.settings.modelSettings.mergingMemoModel)
@@ -2446,7 +2498,7 @@ class NoteBuilderSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Tasks model')
-			.setDesc('Enter a model name, or leave empty to yse "gpt-4o" by default')
+			.setDesc('Enter a model name, or leave empty to use "gpt-4o" by default')
 			.addText(text => text
 				.setPlaceholder('gpt-4o, etc')
 				.setValue(this.plugin.settings.modelSettings.tasksModel)
@@ -2468,7 +2520,7 @@ class NoteBuilderSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Reflex model')
-			.setDesc('Enter a model name, or leave empty to yse "gpt-4o" by default')
+			.setDesc('Enter a model name, or leave empty to use "gpt-4o" by default')
 			.addText(text => text
 				.setPlaceholder('gpt-4o, etc.')
 				.setValue(this.plugin.settings.modelSettings.reflexModel)
@@ -2480,7 +2532,7 @@ class NoteBuilderSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Custom response model')
-			.setDesc('Enter a model name, or leave empty to yse "gpt-4o" by default')
+			.setDesc('Enter a model name, or leave empty to use "gpt-4o" by default')
 			.addText(text => text
 				.setPlaceholder('gpt-4o, etc.')
 				.setValue(this.plugin.settings.modelSettings.customResponseModel)
@@ -2490,7 +2542,7 @@ class NoteBuilderSettingTab extends PluginSettingTab {
 				})
 			)
 
-		containerEl.createEl('h3', { text: 'Smart Memo Settings', cls: 'note-builder-settings-title' });
+		new Setting(containerEl).setName('Smart memo settings').setHeading();
 
 		new Setting(containerEl)
 			.setName('Smart memo custom prompt')
